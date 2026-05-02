@@ -1,0 +1,20 @@
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Depreciated Files
+old-files/
+
+# Python
+__pycache__/
+*.pyc
+stakeholder-polling/database/*.sqlite
+stakeholder-polling/database/*.sqlite-*
+stakeholder-polling/exports/
+stakeholder-polling/logs/

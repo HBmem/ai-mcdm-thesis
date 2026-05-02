@@ -10,6 +10,7 @@
 
 - [x] Review thesis proposal
 - [x] Review proposal and identify implementation-relevant revisions
+- [x] Create policy scenarios
 - [ ] Start creating repository and project structure
 
 ## What I Worked On
