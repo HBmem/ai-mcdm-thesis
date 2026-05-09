@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+
 from pathlib import Path
 
 DEFAULT_DB_PATH = Path("database/stakeholder_polling.sqlite")
@@ -19,7 +20,11 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 def init_db() -> None:
-    """Create SQLite schema. Designed to remain portable to PostgreSQL later."""
+    """
+    Create SQLite schema.
+
+    Designed to remain portable to PostgreSQL later.
+    """
     with get_connection() as conn:
         conn.executescript(
             """
@@ -72,6 +77,9 @@ def init_db() -> None:
                 stakeholder_id TEXT,
                 stakeholder_type_id TEXT NOT NULL,
                 access_code_hash TEXT,
+                access_code_hint TEXT,
+                access_code_created_at TEXT,
+                access_code_regenerated_at TEXT,
                 access_code_expires_at TEXT,
                 status TEXT NOT NULL DEFAULT 'invited',
                 default_voting_power REAL NOT NULL,

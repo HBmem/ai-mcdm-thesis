@@ -4,6 +4,7 @@ from typing import Any
 
 from dashboard.scenario_loader import ScenarioBundle
 
+
 class PreferenceValidationError(ValueError):
     pass
 
@@ -41,6 +42,9 @@ def validate_preferences(bundle: ScenarioBundle, raw_preferences: dict[str, str]
         raise PreferenceValidationError(f"Invalid preference rating values: {', '.join(invalid)}")
     
 def transform_linguistic_preferences(bundle: ScenarioBundle, raw_preferences: dict[str, str]) -> dict[str, Any]:
+    """
+    
+    """
     validate_preferences(bundle, raw_preferences)
     scale = get_scale(bundle)
     by_label = {item["label"]: item for item in scale["values"]}
@@ -60,8 +64,6 @@ def transform_linguistic_preferences(bundle: ScenarioBundle, raw_preferences: di
         for criterion_id, score in numeric_scores.items()
     }
 
-    # Reciprocal pairwise matrix derived from score ratios.
-    # This creates a consistent ratio matrix, but it is not stakeholder-entered pairwise AHP.
     matrix: list[list[float]] = []
     for row_id in criteria_order:
         row: list[float] = []
@@ -69,7 +71,7 @@ def transform_linguistic_preferences(bundle: ScenarioBundle, raw_preferences: di
             denom = numeric_scores[col_id]
             row.append(round(numeric_scores[row_id] / denom, 6) if denom > 0 else 0.0)
         matrix.append(row)
-    
+
     pairwise_payload = {
         "criteria_order": criteria_order,
         "matrix": matrix,
@@ -85,18 +87,8 @@ def transform_linguistic_preferences(bundle: ScenarioBundle, raw_preferences: di
         "scale_id": get_default_scale_id(bundle),
         "numeric_scores": numeric_scores,
         "normalized_direct_weights": normalized,
-
-        "rating_derived_pairwise_matrix": pairwise_payload,
-
         "ahp_pairwise_matrix": pairwise_payload,
-
         "fuzzy_linguistic_values": fuzzy_values,
-        "notes": [
-            "The stakeholder only entered one linguistic importance rating per criterion.",
-            "The AHP pairwise matrix was generated automatically from those ratings.",
-            "The generated pairwise matrix is passed to pyDecision AHP to compute weights.",
-            "True direct pairwise comparison input is deferred to a later interface mode.",
-        ],
     }
 
 def extract_preference_data(submissions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -115,9 +107,9 @@ def extract_preference_data(submissions: list[dict[str, Any]]) -> dict[str, Any]
         },
         "by_stakeholder": {},  # {participant_id: {...detailed data...}}
     }
-    
+
     criteria_list = []  # Track criteria order
-    
+
     for submission in submissions:
         participant_id = submission["participant_id"]
         stakeholder_type = submission.get("stakeholder_type_id", "Unknown")

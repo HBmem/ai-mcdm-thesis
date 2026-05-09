@@ -3,16 +3,16 @@ from __future__ import annotations
 import json
 import time
 
+import pandas as pd
+
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
-from dashboard.function_loader import get_approved_function_decl, load_approved_function
-from dashboard.repositories import create_preprocessing_run, finish_preprocessing_run, log_preprocessing_step
 from dashboard.scenario_loader import ScenarioBundle, safe_resolve
 from dashboard.utils.ids import hash_text
 from dashboard.utils.time import utc_now_iso
+from dashboard.function_loader import get_approved_function_decl, load_approved_function
+from dashboard.repositories import create_preprocessing_run, log_preprocessing_step, finish_preprocessing_run
 
 class PreprocessingError(RuntimeError):
     pass
@@ -50,9 +50,11 @@ def validate_pipeline_config(config: dict[str, Any]) -> None:
             raise PreprocessingError("Each step must include an 'id' and 'type'.")
         if step["type"] not in SUPPORTED_STEPS:
             raise PreprocessingError(f"Unsupported step type: {step['type']}. Supported types are: {', '.join(SUPPORTED_STEPS)}.")
-
+        
 def execute_preprocessing(bundle: ScenarioBundle, session_id: str | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Executes the preprocessing pipeline defined in the scenario bundle and returns the final preprocessed DataFrame along with metadata."""
+    """
+    Executes the preprocessing pipeline defined in the scenario bundle and returns the final preprocessed DataFrame along with metadata.
+    """
     if bundle.preprocessing is None:
         raise PreprocessingError("No preprocessing configuration found in the scenario bundle.")
     
@@ -119,13 +121,22 @@ def execute_preprocessing(bundle: ScenarioBundle, session_id: str | None = None)
                 raise
     
         final_table_name = config["final_output"]["table"]
+
         if final_table_name not in context:
-            raise PreprocessingError(f"Final output table '{final_table_name}' was not produced")
+            raise PreprocessingError(
+                f"Final output table '{final_table_name}' was not produced"
+            )
+
         final_df = context[final_table_name]
         validate_final_output(final_df, config)
 
+        final_output_config = config.get("final_output", {})
+        alternative_id_column = final_output_config.get("alternative_id_column")
+        criteria_columns = final_output_config.get("criteria_columns", [])
+
         final_payload = final_df.to_json(orient="records")
         final_hash = hash_text(final_payload)
+
         finish_preprocessing_run(
             run_id=run_id,
             status="success",
@@ -134,16 +145,24 @@ def execute_preprocessing(bundle: ScenarioBundle, session_id: str | None = None)
             row_count=len(final_df),
             column_count=len(final_df.columns),
         )
+
         metadata = {
             "run_id": run_id,
             "pipeline_id": config.get("pipeline_id", "default_pipeline"),
             "status": "success",
             "config_hash": config_hash,
             "final_output": final_table_name,
-            "row_count": len(final_df),
-            "column_count": len(final_df.columns),
+            "decision_matrix": {
+                "alternative_id_column": alternative_id_column,
+                "criteria_columns": criteria_columns,
+                "row_count": len(final_df),
+                "column_count": len(final_df.columns),
+                "columns": list(final_df.columns),
+                "hash": final_hash,
+            },
             "step_logs": metadata_steps,
         }
+
         return final_df, metadata
 
     except Exception as exc:
@@ -154,7 +173,7 @@ def execute_preprocessing(bundle: ScenarioBundle, session_id: str | None = None)
             error_message=str(exc),
         )
         raise PreprocessingError(str(exc)) from exc
-
+    
 def execute_step(
         bundle: ScenarioBundle,
         config: dict[str, Any],

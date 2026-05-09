@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ class ScenarioBundle:
     @property
     def scales(self) -> dict[str, Any]:
         return self.scenario.get("scales", {})
-
+    
 def read_json(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as f:

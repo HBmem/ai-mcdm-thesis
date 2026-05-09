@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import numpy as np
-from pyDecision.algorithm import ahp_method
 
+from typing import Any
+from pyDecision.algorithm import ahp_method, fuzzy_ahp_method
 
 class WeightingError(RuntimeError):
     pass
-
 
 def _json_loads(value: str | dict | None) -> dict[str, Any]:
     if value is None:
@@ -17,7 +16,6 @@ def _json_loads(value: str | dict | None) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return json.loads(value)
-
 
 def get_pairwise_matrix_from_submission(
     submission: dict[str, Any],
@@ -30,7 +28,11 @@ def get_pairwise_matrix_from_submission(
     """
     transformed = _json_loads(submission.get("transformed_preferences_json"))
 
-    matrix_payload = transformed.get("rating_derived_pairwise_matrix")
+    # Check for both possible key names for robustness
+    matrix_payload = (
+        transformed.get("rating_derived_pairwise_matrix")
+        or transformed.get("ahp_pairwise_matrix")
+    )
     if not matrix_payload:
         raise WeightingError(
             f"Submission {submission.get('submission_id')} does not contain a pairwise matrix."
@@ -53,7 +55,6 @@ def get_pairwise_matrix_from_submission(
         raise WeightingError("Matrix size does not match criteria order length.")
 
     return criteria_order, np_matrix
-
 
 def compute_ahp_weights_from_matrix(
     criteria_order: list[str],
@@ -85,7 +86,6 @@ def compute_ahp_weights_from_matrix(
         "is_consistent": bool(rc <= 0.10),
     }
 
-
 def compute_submission_ahp_result(
     submission: dict[str, Any],
     weight_derivation: str = "geometric",
@@ -108,17 +108,10 @@ def compute_submission_ahp_result(
 
     return result
 
-
-def compute_group_ahp_result(
-    submissions: list[dict[str, Any]],
-    weight_derivation: str = "geometric",
-) -> dict[str, Any]:
+def compute_group_ahp_result(submissions: list[dict[str, Any]], weight_derivation: str = "geometric") -> dict[str, Any]:
     """
     Aggregate multiple stakeholder pairwise matrices using weighted geometric mean,
     then run AHP once on the aggregate group matrix.
-
-    This is better than simply averaging final weights because it preserves the
-    group pairwise-comparison structure.
     """
     if not submissions:
         raise WeightingError("Cannot compute group AHP result without submissions.")

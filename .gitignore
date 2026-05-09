@@ -10,6 +10,7 @@ venv.bak/
 
 # Depreciated Files
 old-files/
+old-stakeholder-polling/
 
 # Python
 __pycache__/

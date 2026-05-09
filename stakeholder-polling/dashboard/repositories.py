@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+
 from typing import Any
 
 from dashboard.db import get_connection
 from dashboard.scenario_loader import ScenarioBundle
-from dashboard.utils.ids import generate_access_code, hash_access_code, hash_text, new_id
 from dashboard.utils.time import utc_now_iso
+from dashboard.utils.ids import generate_access_code as generate_access_code_value, hash_access_code, new_id, hash_text
+from dashboard.access_codes import generate_participant_access_code
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
@@ -25,6 +27,7 @@ def save_scenario_snapshot(bundle: ScenarioBundle) -> None:
         "session_rules": bundle.session_rules,
         "ui_config": bundle.ui_config,
     }
+
     with get_connection() as conn:
         conn.execute(
             """
@@ -50,23 +53,24 @@ def save_scenario_snapshot(bundle: ScenarioBundle) -> None:
                 json.dumps(snapshot, indent=2),
                 now,
                 now,
-            ),
+            )
         )
 
 def create_session(
-    bundle: ScenarioBundle,
-    session_name: str,
-    mode: str,
-    selected_weighting_method: str,
-    selected_ranking_method: str,
-    require_access_code: bool,
-    allow_resubmission: bool,
-    require_moderator_lock: bool,
-    created_by: str | None = None,
+        bundle: ScenarioBundle,
+        session_name: str,
+        mode: str,
+        selected_weighting_method: str,
+        selected_ranking_method: str,
+        require_access_code: bool,
+        allow_resubmission: bool,
+        require_moderator_lock: bool,
+        created_by: str | None = None,
 ) -> str:
     save_scenario_snapshot(bundle)
     now = utc_now_iso()
     session_id = new_id("sess")
+
     with get_connection() as conn:
         conn.execute(
             """
@@ -96,18 +100,72 @@ def create_session(
         )
     return session_id
 
-def list_sessions(statuses: list[str] | None = None) -> list[dict[str, Any]]:
+def list_sessions(
+    statuses: list[str] | None = None,
+    scenario_id: str | None = None,
+    mode: str | None = None,
+    selected_weighting_method: str | None = None,
+    selected_ranking_method: str | None = None,
+    require_access_code: bool | None = None,
+    allow_resubmission: bool | None = None,
+    require_moderator_lock: bool | None = None,
+) -> list[dict[str, Any]]:
+    """List polling sessions with optional filtering.
+    
+    Args:
+        statuses: Filter by session status (e.g., ['open', 'locked'])
+        scenario_id: Filter by scenario ID
+        mode: Filter by session mode (e.g., 'single_stakeholder', 'multi_stakeholder')
+        selected_weighting_method: Filter by weighting method (e.g., 'AHP', 'FUZZY_AHP')
+        selected_ranking_method: Filter by ranking method (e.g., 'TOPSIS', 'FUZZY_TOPSIS')
+        require_access_code: Filter by whether access codes are required
+        allow_resubmission: Filter by whether resubmission is allowed
+        require_moderator_lock: Filter by whether moderator lock is required
+    """
     with get_connection() as conn:
+        where_clauses = []
+        params = []
+        
+        # Build WHERE clause based on provided filters
         if statuses:
             placeholders = ",".join("?" for _ in statuses)
-            rows = conn.execute(
-                f"SELECT * FROM polling_sessions WHERE status IN ({placeholders}) ORDER BY created_at DESC",
-                statuses,
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM polling_sessions ORDER BY created_at DESC"
-            ).fetchall()
+            where_clauses.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+        
+        if scenario_id is not None:
+            where_clauses.append("scenario_id = ?")
+            params.append(scenario_id)
+        
+        if mode is not None:
+            where_clauses.append("mode = ?")
+            params.append(mode)
+        
+        if selected_weighting_method is not None:
+            where_clauses.append("selected_weighting_method = ?")
+            params.append(selected_weighting_method)
+        
+        if selected_ranking_method is not None:
+            where_clauses.append("selected_ranking_method = ?")
+            params.append(selected_ranking_method)
+        
+        if require_access_code is not None:
+            where_clauses.append("require_access_code = ?")
+            params.append(int(require_access_code))
+        
+        if allow_resubmission is not None:
+            where_clauses.append("allow_resubmission = ?")
+            params.append(int(allow_resubmission))
+        
+        if require_moderator_lock is not None:
+            where_clauses.append("require_moderator_lock = ?")
+            params.append(int(require_moderator_lock))
+        
+        # Build final query
+        where_clause = " AND ".join(where_clauses) if where_clauses else "1=1"
+        query = f"SELECT * FROM polling_sessions WHERE {where_clause} ORDER BY created_at DESC"
+        
+        rows = conn.execute(query, params).fetchall()
+    
     return [dict(r) for r in rows]
 
 def get_session(session_id: str) -> dict[str, Any] | None:
@@ -135,10 +193,56 @@ def update_session_status(session_id: str, status: str) -> None:
         )
 
 def create_or_get_stakeholder(display_name: str, alias: str | None = None, external_ref: str | None = None) -> str:
-    # For prototype testing, create a new stakeholder record for each new identification. In production, this should be replaced with a more robust identity management approach.
+    """Get existing stakeholder or create new one.
+    
+    Matching logic:
+    - If external_ref is provided, match by external_ref (most authoritative)
+    - Otherwise, match by display_name
+    
+    If a match is found, updates the record with new alias/external_ref if provided.
+    """
     now = utc_now_iso()
-    stakeholder_id = new_id("stk")
+    
     with get_connection() as conn:
+        # Try to find existing stakeholder
+        row = None
+        if external_ref:
+            # If external_ref is provided, use it as the primary key
+            row = conn.execute(
+                "SELECT stakeholder_id FROM stakeholders WHERE external_ref = ?",
+                (external_ref,)
+            ).fetchone()
+        else:
+            # Otherwise, use display_name
+            row = conn.execute(
+                "SELECT stakeholder_id FROM stakeholders WHERE display_name = ?",
+                (display_name,)
+            ).fetchone()
+        
+        if row:
+            stakeholder_id = row[0]
+            # Update record if new information is provided
+            updates = []
+            params = []
+            if alias is not None:
+                updates.append("alias = ?")
+                params.append(alias)
+            if external_ref is not None:
+                updates.append("external_ref = ?")
+                params.append(external_ref)
+            
+            if updates:
+                updates.append("updated_at = ?")
+                params.append(now)
+                params.append(stakeholder_id)
+                conn.execute(
+                    f"UPDATE stakeholders SET {', '.join(updates)} WHERE stakeholder_id = ?",
+                    params
+                )
+            return stakeholder_id
+        
+        # Create new stakeholder
+        stakeholder_id = new_id("stk")
         conn.execute(
             """
             INSERT INTO stakeholders (stakeholder_id, display_name, alias, external_ref, created_at, updated_at)
@@ -146,7 +250,7 @@ def create_or_get_stakeholder(display_name: str, alias: str | None = None, exter
             """,
             (stakeholder_id, display_name, alias, external_ref, now, now),
         )
-    return stakeholder_id
+        return stakeholder_id
 
 def create_participant(
     session_id: str,
@@ -162,18 +266,23 @@ def create_participant(
     if display_name:
         stakeholder_id = create_or_get_stakeholder(display_name)
 
-    code = generate_access_code() if require_access_code else None
-    code_hash = hash_access_code(code) if code else None
+    code = None
+    code_hash = None
+    code_hint = None
+
+    if require_access_code:
+        code, code_hash, code_hint = generate_participant_access_code()
     effective = override_voting_power if override_voting_power is not None else default_voting_power
 
     with get_connection() as conn:
         conn.execute(
             """
             INSERT INTO session_participants (
-                participant_id, session_id, stakeholder_id, stakeholder_type_id, access_code_hash,
+                participant_id, session_id, stakeholder_id, stakeholder_type_id,
+                access_code_hash, access_code_hint, access_code_created_at,
                 status, default_voting_power, override_voting_power, effective_voting_power,
                 invited_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'invited', ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'invited', ?, ?, ?, ?, ?)
             """,
             (
                 participant_id,
@@ -181,6 +290,8 @@ def create_participant(
                 stakeholder_id,
                 stakeholder_type_id,
                 code_hash,
+                code_hint,
+                now if code_hash else None,
                 default_voting_power,
                 override_voting_power,
                 effective,
@@ -254,6 +365,62 @@ def find_participant_by_access_code(session_id: str, access_code: str) -> dict[s
         ).fetchone()
     return row_to_dict(row)
 
+def regenerate_participant_access_code(participant_id: str) -> str:
+    """
+    Generate a new durable participant access code.
+
+    The old code is invalidated because the stored hash is replaced.
+    The plain code is returned once and should be copied by the moderator.
+    """
+    participant = get_participant(participant_id)
+    if not participant:
+        raise RepositoryError(f"Unknown participant: {participant_id}")
+
+    code, code_hash, code_hint = generate_participant_access_code()
+    now = utc_now_iso()
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE session_participants
+            SET access_code_hash = ?,
+                access_code_hint = ?,
+                access_code_regenerated_at = ?,
+                updated_at = ?
+            WHERE participant_id = ?
+            """,
+            (code_hash, code_hint, now, now, participant_id),
+        )
+
+    return code
+
+def normalize_voting_power(session_id: str) -> None:
+    """Normalize voting power of participants so their weights sum to 1.0.
+    
+    Recalculates the normalized_voting_power for all participants in a session,
+    ensuring that eligible participants' weights are proportional to their
+    effective_voting_power and sum to 1.0. Participants with "excluded" or
+    "expired" status receive a normalized weight of 0.0.
+    
+    Args:
+        session_id: The ID of the polling session to normalize.
+    """
+    participants = list_participants(session_id)
+    eligible = [p for p in participants if p["status"] not in {"excluded", "expired"}]
+    total = sum(float(p["effective_voting_power"] or 0) for p in eligible)
+    now = utc_now_iso()
+
+    with get_connection() as conn:
+        for p in participants:
+            if p in eligible and total > 0:
+                normalized = float(p["effective_voting_power"] or 0) / total
+            else:
+                normalized = 0.0
+            conn.execute(
+                "UPDATE session_participants SET normalized_voting_power = ?, updated_at = ? WHERE participant_id = ?",
+                (normalized, now, p["participant_id"]),
+            )
+
 def update_voting_power(participant_id: str, override_voting_power: float | None, reason: str | None = None) -> None:
     participant = get_participant(participant_id)
     if not participant:
@@ -286,22 +453,6 @@ def update_voting_power(participant_id: str, override_voting_power: float | None
                 now,
             ),
         )
-
-def normalize_voting_power(session_id: str) -> None:
-    participants = list_participants(session_id)
-    eligible = [p for p in participants if p["status"] not in {"excluded", "expired"}]
-    total = sum(float(p["effective_voting_power"] or 0) for p in eligible)
-    now = utc_now_iso()
-    with get_connection() as conn:
-        for p in participants:
-            if p in eligible and total > 0:
-                normalized = float(p["effective_voting_power"] or 0) / total
-            else:
-                normalized = 0.0
-            conn.execute(
-                "UPDATE session_participants SET normalized_voting_power = ?, updated_at = ? WHERE participant_id = ?",
-                (normalized, now, p["participant_id"]),
-            )
 
 def create_submission(
     session_id: str,
@@ -370,6 +521,20 @@ def get_current_submission(session_id: str, participant_id: str) -> dict[str, An
         ).fetchone()
     return row_to_dict(row)
 
+def get_submission_by_id(submission_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT ps.*, sp.stakeholder_type_id, sp.normalized_voting_power
+            FROM preference_submissions ps
+            JOIN session_participants sp
+              ON sp.participant_id = ps.participant_id
+            WHERE ps.submission_id = ?
+            """,
+            (submission_id,),
+        ).fetchone()
+
+    return row_to_dict(row)
 
 def list_submissions(session_id: str) -> list[dict[str, Any]]:
     with get_connection() as conn:
@@ -385,52 +550,596 @@ def list_submissions(session_id: str) -> list[dict[str, Any]]:
         ).fetchall()
     return [dict(r) for r in rows]
 
-def delete_submission(submission_id: str) -> None:
+def list_submissions_for_participant(
+    session_id: str,
+    participant_id: str,
+    current_only: bool = False,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT ps.*, sp.stakeholder_type_id, sp.normalized_voting_power
+        FROM preference_submissions ps
+        JOIN session_participants sp
+          ON sp.participant_id = ps.participant_id
+        WHERE ps.session_id = ?
+          AND ps.participant_id = ?
     """
-    Soft-delete a submission by marking it as non-current.
-    Resets participant status to 'invited'.
-    """
-    session_id: str | None = None
+
+    params: list[Any] = [session_id, participant_id]
+
+    if current_only:
+        query += " AND ps.is_current = 1"
+
+    query += " ORDER BY ps.submitted_at DESC"
 
     with get_connection() as conn:
-        submission = conn.execute(
-            """
-            SELECT session_id, participant_id
-            FROM preference_submissions
-            WHERE submission_id = ?
-            """,
-            (submission_id,),
-        ).fetchone()
+        rows = conn.execute(query, params).fetchall()
 
-        if not submission:
-            raise RepositoryError(f"Submission not found: {submission_id}")
+    return [dict(r) for r in rows]
 
-        session_id = submission["session_id"]
-        participant_id = submission["participant_id"]
-        now = utc_now_iso()
+def _normalize_voting_power_in_conn(conn, session_id: str) -> None:
+    participants = conn.execute(
+        """
+        SELECT participant_id, status, effective_voting_power
+        FROM session_participants
+        WHERE session_id = ?
+        """,
+        (session_id,),
+    ).fetchall()
+
+    eligible = [
+        p for p in participants
+        if p["status"] not in {"excluded", "expired"}
+    ]
+
+    total = sum(float(p["effective_voting_power"] or 0) for p in eligible)
+    now = utc_now_iso()
+
+    for p in participants:
+        if p in eligible and total > 0:
+            normalized = float(p["effective_voting_power"] or 0) / total
+        else:
+            normalized = 0.0
 
         conn.execute(
             """
-            UPDATE preference_submissions
-            SET is_current = 0, updated_at = ?
-            WHERE submission_id = ?
+            UPDATE session_participants
+            SET normalized_voting_power = ?, updated_at = ?
+            WHERE participant_id = ?
             """,
-            (now, submission_id),
+            (normalized, now, p["participant_id"]),
+        )
+
+def submit_preferences_atomic(
+    *,
+    session_id: str,
+    stakeholder_type_id: str,
+    display_name: str,
+    alias: str | None,
+    default_voting_power: float,
+    participant_id: str | None,
+    preference_method: str,
+    raw_preferences: dict[str, Any],
+    transformed_preferences: dict[str, Any],
+    allow_resubmission: bool = False,
+) -> dict[str, str]:
+    """
+    Atomically create/update the participant and save the submission.
+
+    This prevents the public submit page from creating a participant without
+    a matching submission if the second operation fails.
+    """
+    now = utc_now_iso()
+
+    with get_connection() as conn:
+        session = conn.execute(
+            """
+            SELECT *
+            FROM polling_sessions
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+
+        if not session:
+            raise RepositoryError(f"Unknown session: {session_id}")
+
+        if session["status"] != "open":
+            raise RepositoryError("Session is not open for submissions.")
+
+        # If the session is access-code based, the participant should already exist.
+        if session["require_access_code"]:
+            if not participant_id:
+                raise RepositoryError("Participant ID is required for access-code sessions.")
+
+            participant = conn.execute(
+                """
+                SELECT *
+                FROM session_participants
+                WHERE participant_id = ?
+                  AND session_id = ?
+                """,
+                (participant_id, session_id),
+            ).fetchone()
+
+            if not participant:
+                raise RepositoryError("Participant was not found for this session.")
+
+            if participant["stakeholder_type_id"] != stakeholder_type_id:
+                raise RepositoryError("Participant stakeholder type does not match submission.")
+
+            if participant["status"] in {"excluded", "expired"}:
+                raise RepositoryError("This participant is not eligible to submit.")
+
+            stakeholder_id = new_id("stk")
+
+            conn.execute(
+                """
+                INSERT INTO stakeholders (
+                    stakeholder_id, display_name, alias, external_ref,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, NULL, ?, ?)
+                """,
+                (stakeholder_id, display_name, alias, now, now),
+            )
+
+            conn.execute(
+                """
+                UPDATE session_participants
+                SET stakeholder_id = ?,
+                    status = CASE
+                        WHEN status = 'invited' THEN 'started'
+                        ELSE status
+                    END,
+                    started_at = COALESCE(started_at, ?),
+                    updated_at = ?
+                WHERE participant_id = ?
+                """,
+                (stakeholder_id, now, now, participant_id),
+            )
+
+        # If access codes are not required, create participant and stakeholder now.
+        else:
+            if session["mode"] == "single_stakeholder":
+                active_count = conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM session_participants
+                    WHERE session_id = ?
+                      AND status NOT IN ('excluded', 'expired')
+                    """,
+                    (session_id,),
+                ).fetchone()["count"]
+
+                if active_count >= 1:
+                    raise RepositoryError(
+                        "This single-stakeholder session already has an active participant."
+                    )
+
+            stakeholder_id = new_id("stk")
+            participant_id = new_id("part")
+
+            conn.execute(
+                """
+                INSERT INTO stakeholders (
+                    stakeholder_id, display_name, alias, external_ref,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, NULL, ?, ?)
+                """,
+                (stakeholder_id, display_name, alias, now, now),
+            )
+
+            conn.execute(
+                """
+                INSERT INTO session_participants (
+                    participant_id, session_id, stakeholder_id,
+                    stakeholder_type_id, access_code_hash,
+                    status, default_voting_power, override_voting_power,
+                    effective_voting_power, invited_at, started_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, NULL, 'started', ?, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    participant_id,
+                    session_id,
+                    stakeholder_id,
+                    stakeholder_type_id,
+                    default_voting_power,
+                    default_voting_power,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+
+            conn.execute(
+                """
+                INSERT INTO voting_power_assignments (
+                    assignment_id, session_id, participant_id,
+                    stakeholder_type_id, assignment_scope, source,
+                    voting_power, reason, assigned_by, created_at
+                )
+                VALUES (?, ?, ?, ?, 'participant', 'scenario_default', ?, NULL, NULL, ?)
+                """,
+                (
+                    new_id("vpa"),
+                    session_id,
+                    participant_id,
+                    stakeholder_type_id,
+                    default_voting_power,
+                    now,
+                ),
+            )
+
+        # Single-stakeholder protection at submission level.
+        if session["mode"] == "single_stakeholder":
+            other_submission_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM preference_submissions
+                WHERE session_id = ?
+                  AND is_current = 1
+                  AND participant_id <> ?
+                """,
+                (session_id, participant_id),
+            ).fetchone()["count"]
+
+            if other_submission_count >= 1:
+                raise RepositoryError(
+                    "This single-stakeholder session already has a submitted response."
+                )
+
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM preference_submissions
+            WHERE session_id = ?
+              AND participant_id = ?
+              AND is_current = 1
+            """,
+            (session_id, participant_id),
+        ).fetchone()
+
+        if existing and not allow_resubmission:
+            raise RepositoryError("Duplicate submission blocked for this participant.")
+
+        if existing and allow_resubmission:
+            conn.execute(
+                """
+                UPDATE preference_submissions
+                SET is_current = 0,
+                    updated_at = ?
+                WHERE submission_id = ?
+                """,
+                (now, existing["submission_id"]),
+            )
+
+        submission_id = new_id("sub")
+
+        conn.execute(
+            """
+            INSERT INTO preference_submissions (
+                submission_id, session_id, participant_id,
+                submission_version, preference_method,
+                raw_preferences_json, transformed_preferences_json,
+                validation_status, is_current, submitted_at, updated_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?, 'valid', 1, ?, ?)
+            """,
+            (
+                submission_id,
+                session_id,
+                participant_id,
+                preference_method,
+                json.dumps(raw_preferences, indent=2),
+                json.dumps(transformed_preferences, indent=2),
+                now,
+                now,
+            ),
         )
 
         conn.execute(
             """
             UPDATE session_participants
-            SET status = 'invited',
-                submitted_at = NULL,
+            SET status = 'submitted',
+                submitted_at = ?,
                 updated_at = ?
             WHERE participant_id = ?
             """,
-            (now, participant_id),
+            (now, now, participant_id),
         )
 
-    if session_id:
-        normalize_voting_power(session_id)
+        _normalize_voting_power_in_conn(conn, session_id)
+
+    return {
+        "session_id": session_id,
+        "participant_id": participant_id,
+        "submission_id": submission_id,
+    }
+
+def get_session_stakeholder_type_weights(session_id: str) -> dict[str, float]:
+    """
+    Return latest group-level stakeholder-type weights for a session.
+
+    These are not participant-level or submission-level weights.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT stakeholder_type_id, voting_power, created_at
+            FROM voting_power_assignments
+            WHERE session_id = ?
+              AND assignment_scope = 'group'
+              AND stakeholder_type_id IS NOT NULL
+            ORDER BY created_at DESC
+            """,
+            (session_id,),
+        ).fetchall()
+
+    result: dict[str, float] = {}
+
+    for row in rows:
+        stakeholder_type_id = row["stakeholder_type_id"]
+
+        if stakeholder_type_id not in result:
+            result[stakeholder_type_id] = float(row["voting_power"])
+
+    return result
+
+
+def update_session_stakeholder_type_weight(
+    *,
+    session_id: str,
+    stakeholder_type_id: str,
+    voting_power: float,
+    reason: str | None = None,
+    assigned_by: str | None = None,
+) -> None:
+    """
+    Save a stakeholder-type/group-level weight for a session and apply it to
+    all current participants in that stakeholder type.
+
+    This intentionally avoids submission-level and individual participant-level editing.
+    """
+    if voting_power < 0:
+        raise RepositoryError("Voting power cannot be negative.")
+
+    now = utc_now_iso()
+
+    with get_connection() as conn:
+        session = conn.execute(
+            "SELECT * FROM polling_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+
+        if not session:
+            raise RepositoryError(f"Unknown session: {session_id}")
+
+        conn.execute(
+            """
+            INSERT INTO voting_power_assignments (
+                assignment_id, session_id, participant_id, stakeholder_type_id,
+                assignment_scope, source, voting_power, reason, assigned_by, created_at
+            )
+            VALUES (?, ?, NULL, ?, 'group', 'moderator_group_override', ?, ?, ?, ?)
+            """,
+            (
+                new_id("vpa"),
+                session_id,
+                stakeholder_type_id,
+                voting_power,
+                reason,
+                assigned_by,
+                now,
+            ),
+        )
+
+        conn.execute(
+            """
+            UPDATE session_participants
+            SET override_voting_power = ?,
+                effective_voting_power = ?,
+                updated_at = ?
+            WHERE session_id = ?
+              AND stakeholder_type_id = ?
+              AND status NOT IN ('excluded', 'expired')
+            """,
+            (
+                voting_power,
+                voting_power,
+                now,
+                session_id,
+                stakeholder_type_id,
+            ),
+        )
+
+    normalize_voting_power(session_id)
+
+def import_submission_atomic(
+    *,
+    session_id: str,
+    stakeholder_type_id: str,
+    display_name: str,
+    alias: str | None,
+    external_ref: str | None,
+    default_voting_power: float,
+    raw_preferences: dict[str, Any],
+    transformed_preferences: dict[str, Any],
+    preference_method: str,
+    generate_access_code: bool = False,
+    allow_locked_session: bool = False,
+    source: str = "bulk_import",
+) -> dict[str, Any]:
+    """
+    Import one participant + one submission in a single transaction.
+
+    Used for moderator mass testing. This does not expose participant-level
+    weight editing; it applies the session's stakeholder-type weight.
+    """
+    now = utc_now_iso()
+
+    with get_connection() as conn:
+        session = conn.execute(
+            "SELECT * FROM polling_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+
+        if not session:
+            raise RepositoryError(f"Unknown session: {session_id}")
+
+        if session["status"] != "open":
+            if not (allow_locked_session and session["status"] == "locked"):
+                raise RepositoryError(
+                    "Imports are only allowed for open sessions unless locked-session testing is enabled."
+                )
+
+        if session["mode"] == "single_stakeholder":
+            active_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM session_participants
+                WHERE session_id = ?
+                  AND status NOT IN ('excluded', 'expired')
+                """,
+                (session_id,),
+            ).fetchone()["count"]
+
+            if active_count >= 1:
+                raise RepositoryError(
+                    "Cannot import multiple rows into a single-stakeholder session."
+                )
+
+        # Latest group-level session weight, if available.
+        group_weight_row = conn.execute(
+            """
+            SELECT voting_power
+            FROM voting_power_assignments
+            WHERE session_id = ?
+              AND stakeholder_type_id = ?
+              AND assignment_scope = 'group'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (session_id, stakeholder_type_id),
+        ).fetchone()
+
+        effective_voting_power = (
+                float(group_weight_row["voting_power"])
+                if group_weight_row
+                else float(default_voting_power)
+        )
+
+        access_code = None
+        access_code_hash = None
+
+        if generate_access_code:
+            access_code = generate_access_code_value()
+            access_code_hash = hash_access_code(access_code)
+
+        stakeholder_id = new_id("stk")
+        participant_id = new_id("part")
+        submission_id = new_id("sub")
+
+        conn.execute(
+            """
+            INSERT INTO stakeholders (
+                stakeholder_id, display_name, alias, external_ref,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                stakeholder_id,
+                display_name,
+                alias,
+                external_ref,
+                now,
+                now,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO session_participants (
+                participant_id, session_id, stakeholder_id, stakeholder_type_id,
+                access_code_hash, status, default_voting_power,
+                override_voting_power, effective_voting_power,
+                invited_at, started_at, submitted_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'submitted', ?, NULL, ?, ?, ?, ?, ?)
+            """,
+            (
+                participant_id,
+                session_id,
+                stakeholder_id,
+                stakeholder_type_id,
+                access_code_hash,
+                effective_voting_power,
+                effective_voting_power,
+                now,
+                now,
+                now,
+                now,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO voting_power_assignments (
+                assignment_id, session_id, participant_id, stakeholder_type_id,
+                assignment_scope, source, voting_power, reason, assigned_by, created_at
+            )
+            VALUES (?, ?, ?, ?, 'participant', ?, ?, 'Created by submission import', 'moderator', ?)
+            """,
+            (
+                new_id("vpa"),
+                session_id,
+                participant_id,
+                stakeholder_type_id,
+                source,
+                effective_voting_power,
+                now,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO preference_submissions (
+                submission_id, session_id, participant_id,
+                submission_version, preference_method,
+                raw_preferences_json, transformed_preferences_json,
+                validation_status, is_current, submitted_at, updated_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?, 'valid', 1, ?, ?)
+            """,
+            (
+                submission_id,
+                session_id,
+                participant_id,
+                preference_method,
+                json.dumps(raw_preferences, indent=2),
+                json.dumps(transformed_preferences, indent=2),
+                now,
+                now,
+            ),
+        )
+
+    normalize_voting_power(session_id)
+
+    result = {
+        "row_status": "imported",
+        "session_id": session_id,
+        "participant_id": participant_id,
+        "submission_id": submission_id,
+        "stakeholder_type_id": stakeholder_type_id,
+        "display_name": display_name,
+    }
+
+    if access_code:
+        result["access_code"] = access_code
+
+    return result
 
 def get_preprocessing_run(run_id: str) -> dict[str, Any] | None:
     with get_connection() as conn:
@@ -456,7 +1165,6 @@ def create_preprocessing_run(session_id: str | None, scenario_id: str, scenario_
         )
     return run_id
 
-
 def finish_preprocessing_run(
     run_id: str,
     status: str,
@@ -478,7 +1186,6 @@ def finish_preprocessing_run(
             """,
             (status, final_output_ref, final_output_hash, row_count, column_count, now, error_code, error_message, run_id),
         )
-
 
 def log_preprocessing_step(
     run_id: str,

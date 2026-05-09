@@ -6,8 +6,8 @@ from dashboard.repositories import (
     get_session,
     list_participants,
     list_submissions,
-    normalize_voting_power,
-    update_session_status
+    update_session_status,
+    normalize_voting_power
 )
 
 class SessionStateError(ValueError):
@@ -16,7 +16,7 @@ class SessionStateError(ValueError):
 VALID_TRANSITIONS = {
     "draft": {"open", "cancelled"},
     "open": {"locked", "cancelled"},
-    "locked": {"preprocessing", "processing_ready", "cancelled"},
+    "locked": {"open", "preprocessing", "processing_ready", "cancelled"},
     "preprocessing": {"processing_ready", "cancelled", "locked"},
     "processing_ready": {"completed", "cancelled"},
     "completed": {"archived"},
