@@ -11,12 +11,15 @@ from dashboard.ranking import (
 )
 from dashboard.repositories import (
     get_session,
+    get_session_stakeholder_group_weights,
     list_submissions,
     save_export_record,
+    save_stakeholder_group_aggregation_results,
+    list_session_stakeholder_groups,
 )
 from dashboard.weighting import (
     WeightingError,
-    compute_group_ahp_result,
+    compute_group_ahp_result_adaptive,
     compute_submission_ahp_result,
 )
 
@@ -87,7 +90,7 @@ def process_session_for_ai(
                 {
                     "participant_id": submission["participant_id"],
                     "submission_id": submission["submission_id"],
-                    "stakeholder_type_id": submission.get("stakeholder_type_id"),
+                    "stakeholder_group_id": submission.get("stakeholder_group_id"),
                     "normalized_voting_power": submission.get("normalized_voting_power"),
                     "weighting": ahp_result,
                     "ranking": ranking_result,
@@ -105,7 +108,31 @@ def process_session_for_ai(
                 }
             )
 
-    group_ahp = compute_group_ahp_result(submissions)
+    successful_individual_results = [
+        result for result in individual_results
+        if result.get("status") != "failed"
+    ]
+
+    if not successful_individual_results:
+        raise SessionProcessingError(
+            "All individual stakeholder rankings failed. Cannot continue processing."
+        )
+
+    # Fetch stakeholder group voting weights from database (source of truth for live session state)
+    stakeholder_group_weights = get_session_stakeholder_group_weights(session_id)
+    
+    if not stakeholder_group_weights:
+        raise SessionProcessingError(
+            f"No stakeholder group weights found for session {session_id}. "
+            "Session may not be initialized."
+        )
+
+    group_ahp = compute_group_ahp_result_adaptive(
+        submissions=submissions,
+        aggregation_strategy=session.get("aggregation_strategy", "two_stage_by_group"),
+        stakeholder_group_weights=stakeholder_group_weights,
+        weight_derivation="geometric",
+    )
 
     group_ranking = _run_selected_ranking(
         selected_ranking_method=selected_ranking_method,
@@ -135,6 +162,14 @@ def process_session_for_ai(
         contract_version="1.0",
         payload=ai_payload,
         created_by=created_by,
+    )
+
+    # Persist stakeholder group aggregation matrices for later review and audit
+    _persist_stakeholder_group_aggregation_results(
+        session_id=session_id,
+        export_id=export_id,
+        group_ahp=group_ahp,
+        total_submission_count=len(submissions),
     )
 
     return {
@@ -174,3 +209,53 @@ def _run_selected_ranking(
         )
 
     raise RankingError(f"Unsupported ranking method: {selected_ranking_method}")
+
+
+def _persist_stakeholder_group_aggregation_results(
+    *,
+    session_id: str,
+    export_id: str,
+    group_ahp: dict[str, Any],
+    total_submission_count: int,
+) -> None:
+    """
+    Persist stakeholder group aggregation matrices and weights for later review.
+    
+    Called after group AHP computation to save per-group matrices and the final
+    aggregate matrix. Enables dashboard review of aggregation process and audit trail.
+    """
+    from dashboard.utils.ids import new_id
+    
+    criteria_order = group_ahp.get("criteria_order", [])
+    
+    # Save per-stakeholder-group aggregation results
+    group_results = group_ahp.get("stakeholder_group_results", {})
+    for group_id, group_data in group_results.items():
+        save_stakeholder_group_aggregation_results(
+            result_id=new_id("agr"),
+            session_id=session_id,
+            export_id=export_id,
+            stakeholder_group_id=group_id,
+            aggregation_level="stakeholder_group",
+            criteria_order=criteria_order,
+            pairwise_matrix=group_data.get("aggregate_pairwise_matrix", []),
+            weights=group_data.get("weights", {}),
+            consistency_ratio=group_data.get("consistency_ratio"),
+            is_consistent=group_data.get("is_consistent"),
+            submission_count=group_data.get("submission_count"),
+        )
+    
+    # Save final aggregate matrix
+    save_stakeholder_group_aggregation_results(
+        result_id=new_id("agr"),
+        session_id=session_id,
+        export_id=export_id,
+        stakeholder_group_id=None,
+        aggregation_level="final_group",
+        criteria_order=criteria_order,
+        pairwise_matrix=group_ahp.get("aggregate_pairwise_matrix", []),
+        weights=group_ahp.get("group_weights", {}),
+        consistency_ratio=group_ahp.get("consistency_ratio"),
+        is_consistent=group_ahp.get("is_consistent"),
+        submission_count=total_submission_count,
+    )

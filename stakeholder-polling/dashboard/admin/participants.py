@@ -73,9 +73,9 @@ def render_create_participant() -> None:
 
     participants = list_participants(session["session_id"])
 
-    if not participants:
-        st.error("There are no participants for this scenario")
-        return
+    # if not participants:
+    #     st.error("There are no participants for this scenario")
+    #     return
 
     active_count = len([
         p for p in participants
@@ -115,7 +115,7 @@ def render_create_participant() -> None:
             try:
                 participant_id, code = create_participant(
                     session_id=session["session_id"],
-                    stakeholder_type_id=groups[group_label]["id"],
+                    stakeholder_group_id=groups[group_label]["id"],
                     default_voting_power=default_power,
                     display_name=display_name.strip() or None,
                     override_voting_power=override,
@@ -234,7 +234,7 @@ def render_regenerate_access_code() -> None:
         return
 
     participant_options = {
-        f"{p['participant_id']} | {p['stakeholder_type_id']} | status={p['status']} | code hint={p.get('access_code_hint') or 'N/A'}": p
+        f"{p['display_name'] or 'N/A'}": p
         for p in participants
     }
 
@@ -246,6 +246,15 @@ def render_regenerate_access_code() -> None:
 
     target = participant_options[selected_participant_label]
 
+    with st.container():
+        st.header(f"Regenerate Access Code for {target['display_name'] or 'No display name'} ({target['participant_id']})")
+        st.subheader("Current Participant Details")
+        st.markdown(
+            f"- **Alias**: {target['alias'] or 'N/A'}\n"
+            f"- **Stakeholder Group**: {target['stakeholder_group_id']}\n"
+            f"- **Status**: {target['status']}\n"
+            f"- **Current code hint**: {target.get('access_code_hint') or 'N/A'}\n"
+        )
     if st.button("Regenerate access code"):
         try:
             new_code = regenerate_participant_access_code(target["participant_id"])

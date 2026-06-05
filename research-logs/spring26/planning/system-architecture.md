@@ -367,7 +367,7 @@ Moderator defines the following:
 ```json
 {
   "participant_id": "part_001",
-  "stakeholder_type_id": "educators",
+  "stakeholder_group_id": "educators",
   "default_voting_power": 0.25,
   "override_voting_power": 0.35,
   "effective_voting_power": 0.35,
@@ -1079,7 +1079,7 @@ CREATE TABLE session_participants (
     participant_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     stakeholder_id TEXT,
-    stakeholder_type_id TEXT NOT NULL,
+    stakeholder_group_id TEXT NOT NULL,
     access_code_hash TEXT,
     access_code_expires_at TEXT,
     status TEXT NOT NULL DEFAULT 'invited',
@@ -1111,7 +1111,7 @@ CREATE TABLE voting_power_assignments (
     assignment_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     participant_id TEXT,
-    stakeholder_type_id TEXT,
+    stakeholder_group_id TEXT,
     assignment_scope TEXT NOT NULL,
     source TEXT NOT NULL,
     voting_power REAL NOT NULL,

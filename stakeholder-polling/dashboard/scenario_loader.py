@@ -146,7 +146,7 @@ def discover_scenarios(root: str | Path = "scenarios") -> tuple[list[ScenarioBun
 
     scenarios: list[ScenarioBundle] = []
     errors: list[str] = []
-    for folder in sorted([p for p in root_path.iterdir() if p.is_dir()]):
+    for folder in sorted([p for p in root_path.iterdir() if p.is_dir() and p.name != "_template"]):
         if not (folder / "scenario.json").exists():
             continue
         try:

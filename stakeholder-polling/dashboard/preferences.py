@@ -112,7 +112,7 @@ def extract_preference_data(submissions: list[dict[str, Any]]) -> dict[str, Any]
 
     for submission in submissions:
         participant_id = submission["participant_id"]
-        stakeholder_type = submission.get("stakeholder_type_id", "Unknown")
+        stakeholder_group = submission.get("stakeholder_group_id", "Unknown")
         
         try:
             transformed = submission.get("transformed_preferences_json")
@@ -131,7 +131,7 @@ def extract_preference_data(submissions: list[dict[str, Any]]) -> dict[str, Any]
             # Initialize stakeholder entry if needed
             if participant_id not in result["by_stakeholder"]:
                 result["by_stakeholder"][participant_id] = {
-                    "stakeholder_type": stakeholder_type,
+                    "stakeholder_group": stakeholder_group,
                     "numeric_scores": numeric_scores,
                     "normalized_weights": transformed.get("normalized_direct_weights", {}),
                     "pairwise_matrix": transformed.get("rating_derived_pairwise_matrix", {}),

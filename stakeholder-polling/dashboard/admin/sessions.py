@@ -111,6 +111,26 @@ def render_create_session(scenarios: list[ScenarioBundle]) -> None:
                 index=default_ranking_index,
             )
 
+            aggregation_strategy_options = {
+                "two_stage_by_group": "Two-Stage (By Stakeholder Group)",
+                "simple": "Simple (Flat Aggregation - Deprecated)",
+            }
+            
+            aggregation_strategy = st.radio(
+                "Aggregation Strategy",
+                list(aggregation_strategy_options.keys()),
+                format_func=aggregation_strategy_options.get,
+                index=0,
+                horizontal=True,
+                help=(
+                    "**Two-Stage (Recommended)**: Submissions are first aggregated within each stakeholder group "
+                    "(equally), then group matrices are aggregated using stakeholder group voting weights. "
+                    "This ensures each group maintains proper influence regardless of member count.\n\n"
+                    "**Simple (Deprecated)**: All submissions are aggregated together equally. "
+                    "Not recommended for multi-stakeholder decisions."
+                ),
+            )
+
             require_access_code = st.checkbox("Require invitation/access codes", value=False)
             allow_resubmission = st.checkbox("Allow resubmission before session lock", value=False)
             require_moderator_lock = st.checkbox("Require moderator lock before processing", value=True)
@@ -129,6 +149,7 @@ def render_create_session(scenarios: list[ScenarioBundle]) -> None:
                     require_access_code=require_access_code,
                     allow_resubmission=allow_resubmission,
                     require_moderator_lock=require_moderator_lock,
+                    aggregation_strategy=aggregation_strategy,
                     created_by="moderator",
                 )
                 st.success(f"Created session: {session_id}")

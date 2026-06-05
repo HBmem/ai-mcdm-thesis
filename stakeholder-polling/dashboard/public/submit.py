@@ -38,6 +38,15 @@ RESULT_CONTEXT_KEYS = [
     "results_submission_id",
 ]
 
+
+def render_restart_button() -> None:
+    """Render a restart button that resets the submission flow to the identification step."""
+    if st.button("🔄 Restart from beginning", help="Start a new submission from the beginning"):
+        reset_to_new_submission()
+        push_toast("info", "Started a new submission.")
+        st.rerun()
+
+
 def render_submit_page() -> None:
     st.title("🗳️ Submit Policy Preferences")
     st.write("Select an open polling session, review the scenario, and submit your criterion preferences.")
@@ -60,6 +69,7 @@ def render_submit_page() -> None:
             st.rerun()
 
 def render_identification_step() -> None:
+
     open_sessions = list_sessions(['open'])
 
     if not open_sessions:
@@ -80,7 +90,7 @@ def render_identification_step() -> None:
     
     render_scenario_card(bundle)
 
-    stakeholder_types = {
+    stakeholder_groups = {
         g["label"]: g
         for g in bundle.stakeholder_groups
     }
@@ -89,8 +99,8 @@ def render_identification_step() -> None:
         name = st.text_input("Name or alias")
         alias = st.text_input("Optional alias")
         selected_type_label = st.selectbox(
-            "Stakeholder type",
-            list(stakeholder_types.keys()),
+            "Stakeholder group",
+            list(stakeholder_groups.keys()),
         )
 
         access_code = ""
@@ -112,7 +122,7 @@ def render_identification_step() -> None:
         st.error("Please enter a name or alias.")
         return
 
-    selected_type = stakeholder_types[selected_type_label]
+    selected_type = stakeholder_groups[selected_type_label]
 
     try:
         participant_id = None
@@ -128,8 +138,8 @@ def render_identification_step() -> None:
                 st.error("Invalid access code.")
                 return
 
-            if participant["stakeholder_type_id"] != selected_type["id"]:
-                st.error("This access code is not assigned to the selected stakeholder type.")
+            if participant["stakeholder_group_id"] != selected_type["id"]:
+                st.error("This access code is not assigned to the selected stakeholder group.")
                 return
 
             existing_submission = get_current_submission(
@@ -149,7 +159,7 @@ def render_identification_step() -> None:
             "participant_id": participant_id,
             "name": name.strip(),
             "alias": alias.strip() or None,
-            "type_id": selected_type["id"],
+            "group_id": selected_type["id"],
             "voting_power": float(selected_type.get("default_group_voting_power", 1.0)),
             "require_access_code": bool(session["require_access_code"]),
         }
@@ -162,6 +172,7 @@ def render_identification_step() -> None:
         st.error(f"Could not identify participant: {exc}")
 
 def render_summary_step() -> None:
+
     stakeholder_info = st.session_state["stakeholder_info"]
 
     if not stakeholder_info:
@@ -213,6 +224,8 @@ def render_summary_step() -> None:
             st.rerun()
 
 def render_preference_step() -> None:
+    render_restart_button()
+
     stakeholder_info = st.session_state["stakeholder_info"]
 
     if not stakeholder_info:
@@ -280,14 +293,10 @@ def render_preference_step() -> None:
 
         if comments.strip():
             transformed["stakeholder_comment"] = comments.strip()
-
+        
         result = submit_preferences_atomic(
             session_id=session_id,
-            stakeholder_type_id=stakeholder_info["type_id"],
-            display_name=stakeholder_info["name"],
-            alias=stakeholder_info["alias"],
-            default_voting_power=stakeholder_info["voting_power"],
-            participant_id=stakeholder_info.get("participant_id"),
+            stakeholder_info=stakeholder_info,
             preference_method=bundle.preference_collection.get(
                 "default_method",
                 "criterion_linguistic_rating",

@@ -54,6 +54,7 @@ def init_db() -> None:
                 require_access_code INTEGER NOT NULL DEFAULT 1,
                 allow_resubmission INTEGER NOT NULL DEFAULT 0,
                 require_moderator_lock INTEGER NOT NULL DEFAULT 1,
+                aggregation_strategy TEXT NOT NULL DEFAULT 'simple',
                 created_by TEXT,
                 created_at TEXT NOT NULL,
                 opened_at TEXT,
@@ -75,7 +76,7 @@ def init_db() -> None:
                 participant_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
                 stakeholder_id TEXT,
-                stakeholder_type_id TEXT NOT NULL,
+                stakeholder_group_id TEXT NOT NULL,
                 access_code_hash TEXT,
                 access_code_hint TEXT,
                 access_code_created_at TEXT,
@@ -89,6 +90,7 @@ def init_db() -> None:
                 invited_at TEXT,
                 started_at TEXT,
                 submitted_at TEXT,
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES polling_sessions(session_id),
                 FOREIGN KEY (stakeholder_id) REFERENCES stakeholders(stakeholder_id)
@@ -98,7 +100,7 @@ def init_db() -> None:
                 assignment_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
                 participant_id TEXT,
-                stakeholder_type_id TEXT,
+                stakeholder_group_id TEXT,
                 assignment_scope TEXT NOT NULL,
                 source TEXT NOT NULL,
                 voting_power REAL NOT NULL,
@@ -190,6 +192,50 @@ def init_db() -> None:
                 before_json TEXT,
                 after_json TEXT,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS session_stakeholder_groups (
+                session_id TEXT NOT NULL,
+                stakeholder_group_id TEXT NOT NULL,
+                display_name TEXT,
+                default_group_voting_power REAL NOT NULL DEFAULT 1.0,
+                current_group_voting_power REAL NOT NULL DEFAULT 1.0,
+                normalized_group_voting_power REAL NOT NULL DEFAULT 0.0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, stakeholder_group_id),
+                FOREIGN KEY (session_id) REFERENCES polling_sessions(session_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS stakeholder_group_weight_history (
+                history_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                stakeholder_group_id TEXT NOT NULL,
+                old_group_voting_power REAL,
+                new_group_voting_power REAL NOT NULL,
+                reason TEXT,
+                changed_by TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES polling_sessions(session_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS stakeholder_group_aggregation_results (
+                result_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                export_id TEXT,
+                stakeholder_group_id TEXT,
+                aggregation_level TEXT NOT NULL,
+                criteria_order_json TEXT NOT NULL,
+                pairwise_matrix_json TEXT NOT NULL,
+                weights_json TEXT,
+                consistency_ratio REAL,
+                is_consistent INTEGER,
+                submission_count INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES polling_sessions(session_id),
+                FOREIGN KEY (export_id) REFERENCES export_records(export_id)
             );
             """
         )

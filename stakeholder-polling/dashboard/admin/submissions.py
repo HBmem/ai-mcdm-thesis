@@ -25,9 +25,9 @@ from dashboard.repositories import (
     list_sessions,
     list_participants,
     list_submissions,
-    get_session_stakeholder_type_weights,
-    update_session_stakeholder_type_weight,
-    import_submission_atomic,
+    get_session_stakeholder_group_weights,
+    update_session_stakeholder_group_weight,
+    import_submission_atomic
 )
 
 def render_admin_submissions_page() -> None:
@@ -300,9 +300,9 @@ def render_view_metrics(session_id: str) -> None:
     st.subheader("Stakeholder Composition")
     col_a, col_b = st.columns(2)
 
-    if "stakeholder_type_id" in part_df.columns:
+    if "stakeholder_group_id" in part_df.columns:
         type_counts = (
-            part_df.groupby("stakeholder_type_id")
+            part_df.groupby("stakeholder_group_id")
             .agg(
                 Total=("participant_id", "count"),
                 Submitted=(
@@ -311,14 +311,14 @@ def render_view_metrics(session_id: str) -> None:
                 ),
             )
             .reset_index()
-            .rename(columns={"stakeholder_type_id": "Stakeholder Type"})
+            .rename(columns={"stakeholder_group_id": "Stakeholder Group"})
         )
 
         with col_a:
-            st.markdown("**Participants by Stakeholder Type**")
+            st.markdown("**Participants by Stakeholder Group**")
             fig = px.pie(
                 type_counts,
-                names="Stakeholder Type",
+                names="Stakeholder Group",
                 values="Total",
                 hole=0.45,
                 color_discrete_sequence=px.colors.qualitative.Set2,
@@ -329,25 +329,25 @@ def render_view_metrics(session_id: str) -> None:
                 showlegend=True,
                 height=300,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         with col_b:
             if "normalized_voting_power" in part_df.columns:
-                st.markdown("**Submitted Voting Power by Stakeholder Type**")
+                st.markdown("**Submitted Voting Power by Stakeholder Group**")
                 vp_by_type = (
-                    submitted_df.groupby("stakeholder_type_id")["normalized_voting_power"]
+                    submitted_df.groupby("stakeholder_group_id")["normalized_voting_power"]
                     .sum()
                     .reset_index()
                     .rename(
                         columns={
-                            "stakeholder_type_id": "Stakeholder Type",
+                            "stakeholder_group_id": "Stakeholder Group",
                             "normalized_voting_power": "Voting Power",
                         }
                     )
                 )
                 fig2 = px.pie(
                     vp_by_type,
-                    names="Stakeholder Type",
+                    names="Stakeholder Group",
                     values="Voting Power",
                     hole=0.45,
                     color_discrete_sequence=px.colors.qualitative.Set2,
@@ -362,22 +362,22 @@ def render_view_metrics(session_id: str) -> None:
                     showlegend=True,
                     height=300,
                 )
-                st.plotly_chart(fig2, use_container_width=True)
+                st.plotly_chart(fig2, width='stretch')
 
     st.divider()
 
-    # ── Row 2: Submission status per stakeholder type ────────────────────────
-    st.subheader("Submission Status by Stakeholder Type")
-    if "stakeholder_type_id" in part_df.columns:
+    # ── Row 2: Submission status per stakeholder group ────────────────────────
+    st.subheader("Submission Status by Stakeholder Group")
+    if "stakeholder_group_id" in part_df.columns:
         status_by_type = (
-            part_df.groupby(["stakeholder_type_id", "status"])
+            part_df.groupby(["stakeholder_group_id", "status"])
             .size()
             .reset_index(name="Count")
-            .rename(columns={"stakeholder_type_id": "Stakeholder Type", "status": "Status"})
+            .rename(columns={"stakeholder_group_id": "Stakeholder Group", "status": "Status"})
         )
         fig3 = px.bar(
             status_by_type,
-            x="Stakeholder Type",
+            x="Stakeholder Group",
             y="Count",
             color="Status",
             barmode="stack",
@@ -394,7 +394,7 @@ def render_view_metrics(session_id: str) -> None:
             yaxis_title="Participants",
             legend_title="Status",
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width='stretch')
 
     st.divider()
 
@@ -444,7 +444,7 @@ def render_view_metrics(session_id: str) -> None:
                 margin=dict(t=20, b=10, l=10, r=10),
                 height=320,
             )
-            st.plotly_chart(fig4, use_container_width=True)
+            st.plotly_chart(fig4, width='stretch')
         else:
             st.info("No submission timestamps available for timeline.")
     else:
@@ -481,7 +481,7 @@ def render_view_metrics(session_id: str) -> None:
                     margin=dict(t=10, b=10, l=10, r=10),
                     height=280,
                 )
-                st.plotly_chart(fig5, use_container_width=True)
+                st.plotly_chart(fig5, width='stretch')
 
                 median_mins = rt_df["minutes_to_submit"].median()
                 mean_mins   = rt_df["minutes_to_submit"].mean()
@@ -496,14 +496,14 @@ def render_view_metrics(session_id: str) -> None:
     with col_d:
         st.subheader("Voting Power Distribution")
         if "normalized_voting_power" in part_df.columns and "display_name" in part_df.columns:
-            vp_df = part_df[["display_name", "stakeholder_type_id", "normalized_voting_power", "status"]].copy()
+            vp_df = part_df[["display_name", "stakeholder_group_id", "normalized_voting_power", "status"]].copy()
             vp_df = vp_df.sort_values("normalized_voting_power", ascending=False)
 
             fig6 = px.bar(
                 vp_df,
                 x="display_name",
                 y="normalized_voting_power",
-                color="status",
+                color="stakeholder_group_id",
                 color_discrete_map={
                     "submitted": "#2ecc71",
                     "started":   "#f39c12",
@@ -514,7 +514,7 @@ def render_view_metrics(session_id: str) -> None:
                     "normalized_voting_power": "Normalised Voting Power",
                     "status": "Status",
                 },
-                hover_data={"stakeholder_type_id": True},
+                hover_data={"stakeholder_group_id": True},
             )
             fig6.update_layout(
                 xaxis_tickangle=-45,
@@ -522,7 +522,7 @@ def render_view_metrics(session_id: str) -> None:
                 height=280,
                 showlegend=True,
             )
-            st.plotly_chart(fig6, use_container_width=True)
+            st.plotly_chart(fig6, width='stretch')
         else:
             st.info("Voting power data not available.")
 
@@ -566,7 +566,7 @@ def render_view_metrics(session_id: str) -> None:
                 height=240,
                 xaxis=dict(tickmode="linear", dtick=1),
             )
-            st.plotly_chart(fig7, use_container_width=True)
+            st.plotly_chart(fig7, width='stretch')
     else:
         st.info("No submission version data available.")
 
@@ -574,13 +574,13 @@ def render_view_metrics(session_id: str) -> None:
 
     # ── Row 6: Raw data expanders ────────────────────────────────────────────
     with st.expander("Raw participant data"):
-        st.dataframe(part_df, use_container_width=True, hide_index=True)
+        st.dataframe(part_df, width='stretch', hide_index=True)
 
     if not sub_df.empty:
         with st.expander("Raw submission data"):
             JSON_COLS = ["raw_preferences_json", "transformed_preferences_json"]
             display_cols = [c for c in sub_df.columns if c not in JSON_COLS]
-            st.dataframe(sub_df[display_cols], use_container_width=True, hide_index=True)
+            st.dataframe(sub_df[display_cols], width='stretch', hide_index=True)
 
 def render_adjust_weights() -> None:
     filters = render_session_filters(
@@ -627,42 +627,42 @@ def render_adjust_weights() -> None:
 
     participants = list_participants(session["session_id"])
     submissions = list_submissions(session["session_id"])
-    current_group_weights = get_session_stakeholder_type_weights(session["session_id"])
+    current_group_weights = get_session_stakeholder_group_weights(session["session_id"])
 
     participant_counts_by_type: dict[str, int] = {}
     submitted_counts_by_type: dict[str, int] = {}
 
     for participant in participants:
-        stakeholder_type_id = participant["stakeholder_type_id"]
-        participant_counts_by_type[stakeholder_type_id] = (
-            participant_counts_by_type.get(stakeholder_type_id, 0) + 1
+        stakeholder_group_id = participant["stakeholder_group_id"]
+        participant_counts_by_type[stakeholder_group_id] = (
+            participant_counts_by_type.get(stakeholder_group_id, 0) + 1
         )
 
     for submission in submissions:
-        stakeholder_type_id = submission.get("stakeholder_type_id")
-        submitted_counts_by_type[stakeholder_type_id] = (
-            submitted_counts_by_type.get(stakeholder_type_id, 0) + 1
+        stakeholder_group_id = submission.get("stakeholder_group_id")
+        submitted_counts_by_type[stakeholder_group_id] = (
+            submitted_counts_by_type.get(stakeholder_group_id, 0) + 1
         )
 
     rows = []
     for group in bundle.stakeholder_groups:
-        stakeholder_type_id = group["id"]
+        stakeholder_group_id = group["id"]
         scenario_default = float(group.get("default_group_voting_power", 1.0))
 
         current_weight = current_group_weights.get(
-            stakeholder_type_id,
+            stakeholder_group_id,
             scenario_default,
         )
 
         rows.append(
             {
-                "Stakeholder Type ID": stakeholder_type_id,
-                "Label": group.get("label", stakeholder_type_id),
+                "Stakeholder Group ID": stakeholder_group_id,
+                "Label": group.get("label", stakeholder_group_id),
                 "Description": group.get("description", ""),
                 "Scenario Default": scenario_default,
                 "Session Weight": float(current_weight),
-                "Participants": participant_counts_by_type.get(stakeholder_type_id, 0),
-                "Submitted": submitted_counts_by_type.get(stakeholder_type_id, 0),
+                "Participants": participant_counts_by_type.get(stakeholder_group_id, 0),
+                "Submitted": submitted_counts_by_type.get(stakeholder_group_id, 0),
             }
         )
 
@@ -672,7 +672,7 @@ def render_adjust_weights() -> None:
 
     st.caption(
         "Edit only the `Session Weight` column. Saved values will be applied to all "
-        "current participants in that stakeholder type and used by future import logic."
+        "current participants in that stakeholder group and used by future import logic."
     )
 
     edited_df = st.data_editor(
@@ -680,7 +680,7 @@ def render_adjust_weights() -> None:
         width="stretch",
         hide_index=True,
         disabled=[
-            "Stakeholder Type ID",
+            "Stakeholder Group ID",
             "Label",
             "Description",
             "Scenario Default",
@@ -706,7 +706,7 @@ def render_adjust_weights() -> None:
     total_weight = float(edited_df["Session Weight"].sum())
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Stakeholder Types", len(edited_df))
+    col1.metric("Stakeholder Groups", len(edited_df))
     col2.metric("Total Raw Weight", round(total_weight, 4))
     col3.metric("Participants", len(participants))
 
@@ -730,12 +730,12 @@ def render_adjust_weights() -> None:
     if st.button("Save Stakeholder-Type Weights", type="primary"):
         try:
             for _, row in edited_df.iterrows():
-                update_session_stakeholder_type_weight(
+                update_session_stakeholder_group_weight(
                     session_id=session["session_id"],
-                    stakeholder_type_id=str(row["Stakeholder Type ID"]),
-                    voting_power=float(row["Session Weight"]),
+                    stakeholder_group_id=str(row["Stakeholder Group ID"]),
+                    new_group_voting_power=float(row["Session Weight"]),
                     reason=reason.strip() or None,
-                    assigned_by="moderator",
+                    changed_by="moderator",
                 )
             push_toast("success",
                        "Stakeholder-type weights saved. Existing participants in each group "
@@ -746,10 +746,10 @@ def render_adjust_weights() -> None:
             st.error(f"Could not save stakeholder-type weights: {exc}")
 
 def build_submission_import_template(bundle) -> pd.DataFrame:
-    stakeholder_type_id = (
+    stakeholder_group_id = (
         bundle.stakeholder_groups[0]["id"]
         if bundle.stakeholder_groups
-        else "example_stakeholder_type"
+        else "example_stakeholder_group"
     )
 
     labels = scale_labels(bundle)
@@ -758,7 +758,7 @@ def build_submission_import_template(bundle) -> pd.DataFrame:
     row_1 = {
         "display_name": "Test Stakeholder 1",
         "alias": "test_1",
-        "stakeholder_type_id": stakeholder_type_id,
+        "stakeholder_group_id": stakeholder_group_id,
         "external_ref": "import_test_001",
         "comment": "Example imported submission.",
     }
@@ -766,7 +766,7 @@ def build_submission_import_template(bundle) -> pd.DataFrame:
     row_2 = {
         "display_name": "Test Stakeholder 2",
         "alias": "test_2",
-        "stakeholder_type_id": stakeholder_type_id,
+        "stakeholder_group_id": stakeholder_group_id,
         "external_ref": "import_test_002",
         "comment": "Second example imported submission.",
     }
@@ -804,10 +804,10 @@ def validate_import_dataframe(
     bundle,
     session: dict,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    required_meta_cols = ["display_name", "stakeholder_type_id"]
+    required_meta_cols = ["display_name", "stakeholder_group_id"]
     criterion_ids = [c["id"] for c in bundle.criteria if c.get("required", True)]
     allowed_labels = set(scale_labels(bundle))
-    stakeholder_type_ids = {g["id"] for g in bundle.stakeholder_groups}
+    stakeholder_group_ids = {g["id"] for g in bundle.stakeholder_groups}
 
     validation_rows: list[dict[str, Any]] = []
     prepared_rows: list[dict[str, Any]] = []
@@ -821,7 +821,7 @@ def validate_import_dataframe(
                 {
                     "Row": idx + 2,
                     "Display Name": "",
-                    "Stakeholder Type": "",
+                    "Stakeholder Group": "",
                     "Valid": False,
                     "Error": (
                         f"Missing columns. Metadata: {missing_meta}; "
@@ -842,14 +842,14 @@ def validate_import_dataframe(
             if "external_ref" in df.columns
             else None
         )
-        stakeholder_type_id = str(row.get("stakeholder_type_id", "")).strip()
+        stakeholder_group_id = str(row.get("stakeholder_group_id", "")).strip()
 
         if not display_name:
             errors.append("display_name is required")
 
-        if stakeholder_type_id not in stakeholder_type_ids:
+        if stakeholder_group_id not in stakeholder_group_ids:
             errors.append(
-                f"stakeholder_type_id must be one of: {', '.join(sorted(stakeholder_type_ids))}"
+                f"stakeholder_group_id must be one of: {', '.join(sorted(stakeholder_group_ids))}"
             )
 
         raw_preferences = {}
@@ -900,7 +900,7 @@ def validate_import_dataframe(
             {
                 "Row": row_number,
                 "Display Name": display_name,
-                "Stakeholder Type": stakeholder_type_id,
+                "Stakeholder Group": stakeholder_group_id,
                 "Valid": valid,
                 "Error": "; ".join(errors),
             }
@@ -918,10 +918,10 @@ def validate_import_dataframe(
                     "display_name": display_name,
                     "alias": alias or None,
                     "external_ref": external_ref or None,
-                    "stakeholder_type_id": stakeholder_type_id,
+                    "stakeholder_group_id": stakeholder_group_id,
                     "raw_preferences": raw_preferences,
                     "transformed_preferences": transformed_preferences,
-                    "default_voting_power": group_defaults[stakeholder_type_id],
+                    "default_voting_power": group_defaults[stakeholder_group_id],
                 }
             )
 
@@ -981,7 +981,7 @@ def render_import_submissions() -> None:
     st.header("Import Submissions")
     st.write(
         "Upload a CSV or Excel file where each row represents one stakeholder submission. "
-        "The file must include a stakeholder type and one preference rating per criterion."
+        "The file must include a stakeholder group and one preference rating per criterion."
     )
 
     if session["status"] == "locked":
@@ -1112,7 +1112,7 @@ def render_import_submissions() -> None:
             try:
                 result = import_submission_atomic(
                     session_id=session["session_id"],
-                    stakeholder_type_id=prepared["stakeholder_type_id"],
+                    stakeholder_group_id=prepared["stakeholder_group_id"],
                     display_name=prepared["display_name"],
                     alias=prepared.get("alias"),
                     external_ref=prepared.get("external_ref"),
