@@ -11,6 +11,7 @@ venv.bak/
 # Depreciated Files
 old-files/
 old-stakeholder-polling/
+old-old-stakeholder-polling/
 
 # Python
 __pycache__/

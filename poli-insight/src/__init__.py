@@ -1,0 +1,1 @@
+"""Poli Insight - an AI-assisted multi-criteria policy decision-support system."""
