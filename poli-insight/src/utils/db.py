@@ -99,6 +99,7 @@ def initialize_db():
                 access_code_expires_at TEXT,
                 invited_at TEXT,
                 submitted_at TEXT,
+                completed_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE (session_id, participant_id),
@@ -146,4 +147,3 @@ def initialize_db():
             );
             """
         )
-        
