@@ -27,44 +27,62 @@ def initialize_db():
     with get_db_connection() as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS scenario_snapshots (
+                scenario_id TEXT NOT NULL,
+                scenario_version TEXT NOT NULL,
+                title TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                config_snapshot_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (scenario_id, scenario_version)
+            );
+
             CREATE TABLE IF NOT EXISTS scenario_sessions (
                 session_id TEXT PRIMARY KEY,
                 scenario_id TEXT NOT NULL,
-                session_title TEXT NOT NULL,
-                session_description TEXT,
-                session_visibility TEXT NOT NULL,
-                status TEXT NOT NULL,
+                scenario_version TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
                 admin_notes TEXT,
+                visibility TEXT NOT NULL,
+                participation_mode TEXT NOT NULL,
+                preference_method TEXT NOT NULL,
                 weighting_method TEXT NOT NULL,
                 ranking_method TEXT NOT NULL,
-                preference_method TEXT NOT NULL,
-                participation_mode TEXT NOT NULL,
                 aggregation_method TEXT NOT NULL,
-                voting_power TEXT NOT NULL,
-                voting_power_config TEXT NOT NULL DEFAULT '{}',
-                require_access_code INTEGER NOT NULL DEFAULT 0,         
+                require_access_code INTEGER NOT NULL DEFAULT 0,
                 access_code_type TEXT,
                 allow_resubmissions INTEGER NOT NULL DEFAULT 0,
-                start_date_time TEXT,
-                end_date_time TEXT,
-                opened_by TEXT,
+                start_at TEXT,
+                end_at TEXT,
+                status TEXT NOT NULL,
                 opened_at TEXT,
-                closed_by TEXT,
                 closed_at TEXT,
+                archived_at TEXT,
                 created_by TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_by TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('draft', 'active', 'closed', 'archived')),
+                CHECK (opened_at <= closed_at),
+                CHECK (closed_at <= archived_at),
+                CHECK (created_at <= updated_at),
+                FOREIGN KEY (scenario_id, scenario_version) REFERENCES scenario_snapshots(scenario_id, scenario_version)
             );
 
             CREATE TABLE IF NOT EXISTS session_stakeholder_groups(
                 session_id TEXT NOT NULL,
                 stakeholder_group_id TEXT NOT NULL,
                 stakeholder_group_name TEXT NOT NULL,
-                unique_voting_power REAL,
+                default_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (default_voting_power > 0),
+                current_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (current_voting_power > 0),
+                normalized_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (normalized_voting_power > 0),
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                CHECK (is_active IN (0, 1)),
                 PRIMARY KEY (session_id, stakeholder_group_id),
                 FOREIGN KEY (session_id) REFERENCES scenario_sessions(session_id)
             );
@@ -73,68 +91,59 @@ def initialize_db():
                 participant_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
                 stakeholder_group_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL,
                 access_code_hash TEXT,
                 access_code_created_at TEXT,
                 access_code_regenerated_at TEXT,
-                access_code_expires_at TEXT NOT NULL,
+                access_code_expires_at TEXT,
                 invited_at TEXT,
-                started_at TEXT,
                 submitted_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES scenario_sessions(session_id),
-                FOREIGN KEY (stakeholder_group_id) REFERENCES session_stakeholder_groups(stakeholder_group_id)
+                UNIQUE (session_id, participant_id),
+                CHECK (status IN ('invited', 'active', 'submitted', 'disabled', 'expired')),
+                FOREIGN KEY (session_id, stakeholder_group_id) REFERENCES session_stakeholder_groups(session_id, stakeholder_group_id)
             );
 
-            CREATE TABLE IF NOT EXISTS session_participant_submissions (
+            CREATE TABLE IF NOT EXISTS preference_submissions (
                 submission_id TEXT PRIMARY KEY,
-                participant_id TEXT NOT NULL,
                 session_id TEXT NOT NULL,
-                stakeholder_group_id TEXT NOT NULL,
-                submission_data TEXT NOT NULL,
+                participant_id TEXT NOT NULL,
+                submission_version INTEGER NOT NULL,
+                preference_scale TEXT NOT NULL,
+                raw_preference_json TEXT NOT NULL,
+                transformed_preference_json TEXT,
+                validation_status TEXT,
+                is_current INTEGER NOT NULL DEFAULT 1,
+                submitted_at TEXT NOT NULL,
+                superseded_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                FOREIGN KEY (participant_id) REFERENCES session_participants(participant_id),
-                FOREIGN KEY (session_id) REFERENCES scenario_sessions(session_id),
-                FOREIGN KEY (stakeholder_group_id) REFERENCES session_stakeholder_groups(stakeholder_group_id)
+                CHECK (submission_version >= 0),
+                CHECK (is_current IN (0, 1)),
+                UNIQUE (participant_id, submission_version),
+                FOREIGN KEY (session_id, participant_id) REFERENCES session_participants(session_id, participant_id)
             );
 
-            CREATE TABLE IF NOT EXISTS session_participant_submission_log (
-                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                submission_id TEXT NOT NULL,
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_current_submissions
+            ON preference_submissions(session_id, participant_id)
+            WHERE is_current = 1;
+
+            CREATE TABLE IF NOT EXISTS audit_events (
+                audit_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
                 action TEXT NOT NULL,
-                details TEXT,
-                created_by TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT,
+                before_json TEXT,
+                after_json TEXT,
+                reason TEXT,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY (submission_id) REFERENCES session_participant_submissions(submission_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS session_stakeholder_groups (
-                session_id,
-                stakeholder_group_id,
-                group_name
-                default_voting_power REAL NOT NULL DEFAULT 1.0,
-                current_group_voting_power REAL NOT NULL DEFAULT 1.0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_by TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_by TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-                PRIMARY KEY (session_id, stakeholder_group_id),
                 FOREIGN KEY (session_id) REFERENCES scenario_sessions(session_id)
             );
-
-            CREATE TABLE IF NOT EXISTS session_stakeholder_group_log (
-                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                stakeholder_group_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                details TEXT,
-                created_by TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (session_id) REFERENCES scenario_sessions(session_id),
-                FOREIGN KEY (stakeholder_group_id) REFERENCES session_stakeholder_groups(stakeholder_group_id)
-            );
             """
-            
         )
+        
