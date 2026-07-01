@@ -1,41 +1,64 @@
 from enum import StrEnum
 
 class SessionStatus(StrEnum):
-    DRAFT = "draft"
-    OPEN = "open"
-    CLOSED = "closed"
-    PROCESSED = "processed"
-    PUBLISHED = "published"
-    ARCHIVED = "archived"
+    DRAFT = "Draft"
+    OPEN = "Open"
+    CLOSED = "Closed"
+    PROCESSED = "Processed"
+    PUBLISHED = "Published"
+    ARCHIVED = "Archived"
 
 class SessionVisibility(StrEnum):
-    PUBLIC = "public"
-    PRIVATE = "private"
-    UNLISTED = "unlisted"
+    PUBLIC = "Public"
+    PRIVATE = "Private"
+    UNLISTED = "Unlisted"
 
 class ParticipantStatus(StrEnum):
-    INVITED = "invited"
-    STARTED = "started"
-    SUBMITTED = "submitted"
-    DISABLED = "disabled"
-    EXPIRED = "expired"
+    INVITED = "Invited"
+    STARTED = "Started"
+    SUBMITTED = "Submitted"
+    DISABLED = "Disabled"
+    EXPIRED = "Expired"
 
 class WeightingMethod(StrEnum):
-    AHP = "ahp"
-    FUZZY_AHP = "fuzzy_ahp"
+    AHP = "AHP"
+    FUZZY_AHP = "Fuzzy AHP"
 
 class RankingMethod(StrEnum):
-    TOPSIS = "topsis"
-    FUZZY_TOPSIS = "fuzzy_topsis"
+    TOPSIS = "TOPSIS"
+    FUZZY_TOPSIS = "Fuzzy TOPSIS"
 
-class PreferenceScale(StrEnum):
-    FIVE_POINT_SCALE = "5_point_scale"
-    SEVEN_POINT_SCALE = "7_point_scale"
+class PreferenceMethod(StrEnum):
+    FIVE_POINT_SCALE = "5 Point Scale"
+    SEVEN_POINT_SCALE = "7 Point Scale"
 
-class ParticipationMode(StrEnum):
-    SINGLE_PARTICIPANT = "single_participant"
-    MULTIPLE_PARTICIPANTS = "multiple_participants"
+class ParticipationMethod(StrEnum):
+    SINGLE_PARTICIPANT = "Single Participant"
+    MULTIPLE_PARTICIPANTS = "Multiple Participants"
 
 class AggregationMethod(StrEnum):
-    GROUP_STAKEHOLDER = "group_stakeholder"
-    INDIVIDUAL = "individual"
+    GROUP_STAKEHOLDER = "Group Stakeholder"
+    INDIVIDUAL = "Individual"
+
+# TODO: To be used later for audit logging to identify the type of actor performing an action and the type of entity being acted upon.
+class ActorType(StrEnum):
+    ADMIN = "Admin"
+    MODERATOR = "moderator"
+    PARTICIPANT = "participant"
+    SYSTEM = "system"
+    AI_SERVICE = "ai_service"
+    IMPORT_PROCESS = "import_process"
+    API_CLIENT = "api_client"
+
+class EntityType(StrEnum):
+    SCENARIO_SNAPSHOT = "scenario_snapshot"
+    SESSION = "session"
+    STAKEHOLDER_GROUP = "stakeholder_group"
+    PARTICIPANT = "participant"
+    SUBMISSION = "submission"
+    PROCESSING_RUN = "processing_run"
+    ANALYSIS_RESULT = "analysis_result"
+    SENSITIVITY_RUN = "sensitivity_run"
+    AI_ANALYSIS = "ai_analysis"
+    PUBLICATION = "publication"
+    EXPORT = "export"

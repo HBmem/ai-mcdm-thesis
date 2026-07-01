@@ -3,8 +3,9 @@ from datetime import datetime
 
 import streamlit as st
 
+from src.models.scenario import ScenarioBundle
+
 from src.utils.repositories import get_session, get_sessions
-from src.utils.scenario_loader import ScenarioBundle
 
 def render_session_row(session: dict, scenario: ScenarioBundle | None):
     st.html(f"""
@@ -12,6 +13,7 @@ def render_session_row(session: dict, scenario: ScenarioBundle | None):
             .st-key-{session['session_id']} {{
                 background: #fff;
             }}
+            </style>
             """)
     with st.container(border=True, key=session['session_id']):
         if scenario is None:

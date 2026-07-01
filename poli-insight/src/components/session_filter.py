@@ -52,6 +52,7 @@ def render_session_filter(
             .st-key-{session_state_key} {{
                 background: #fff;
             }}
+            </style>
             """)
     
     with st.container(border=True, key=session_state_key):

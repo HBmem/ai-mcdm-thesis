@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from src.models.enum import AggregationMethod, ParticipationMode, PreferenceScale, RankingMethod, SessionStatus, SessionVisibility, WeightingMethod
+from src.models.enum import AggregationMethod, ParticipationMethod, PreferenceMethod, RankingMethod, SessionStatus, SessionVisibility, WeightingMethod
 
 @dataclass(frozen=True)
 class SessionScenario:
@@ -17,8 +17,8 @@ class SessionScenario:
     visibility: SessionVisibility
     weighting_method: WeightingMethod
     ranking_method: RankingMethod
-    preference_method: PreferenceScale
-    participation_mode: ParticipationMode
+    preference_method: PreferenceMethod
+    participation_method: ParticipationMethod
     aggregation_method: AggregationMethod
     require_access_code: bool
     access_code_type: str | None
@@ -36,10 +36,8 @@ class SessionScenario:
     def can_accept_submissions(self) -> bool:
         return (
             self.status == SessionStatus.OPEN
-            and self.start_at is None
-            or self.start_at <= datetime.now()
-            and self.end_at is None
-            or self.end_at > datetime.now()
+            and (self.start_at is None or self.start_at <= datetime.now())
+            and (self.end_at is None or self.end_at > datetime.now())
         )
 
 @dataclass

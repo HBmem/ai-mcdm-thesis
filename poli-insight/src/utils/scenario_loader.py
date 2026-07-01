@@ -6,27 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-class ScenarioConfigurationError(ValueError):
-    pass
-
-@dataclass(frozen=True)
-class ScenarioBundle:
-    scenario_id: str
-    scenario_version: str
-    scenario_type: str
-    title: str
-    domain: str
-    folder: Path
-    scenario: dict[str, Any]
-    criteria: list[dict[str, Any]]
-    data_sources: dict[str, Any]
-    preprocessing: dict[str, Any] | None
-    session_rules: dict[str, Any]
-    ui_config: dict[str, Any]
-
-    @property
-    def stakeholder_groups(self) -> list[dict[str, Any]]:
-        return self.scenario.get("stakeholder_groups", [])
+from src.models.scenario import ScenarioBundle, ScenarioConfigurationError
         
 def load_scenario_folder(folder: Path) -> ScenarioBundle:
     manifest_path = folder / "scenario.json"
@@ -65,23 +45,12 @@ def load_scenario_folder(folder: Path) -> ScenarioBundle:
     ui_config_path = _safe_resolve(folder, ui_config_ref)
     ui_config = _read_json(ui_config_path) if ui_config_path and ui_config_path.exists() else manifest.get("ui_config", {})
 
-    # TODO: consider saving scenario data in database
-    # full_snapshot = {
-    #     "scenario": manifest,
-    #     "criteria": criteria,
-    #     "data_sources": data_sources,
-    #     "preprocessing": preprocessing,
-    #     "session_rules": session_rules,
-    #     "ui_config": ui_config,
-    # }
-
     return ScenarioBundle(
         scenario_id=manifest.get("scenario_id"),
         scenario_version=manifest.get("scenario_version"),
         scenario_type=manifest.get("scenario_type"),
         title=manifest.get("title"),
         domain=manifest.get("domain"),
-        folder=folder,
         scenario=manifest,
         criteria=criteria,
         data_sources=data_sources,

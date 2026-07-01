@@ -30,6 +30,7 @@ def initialize_db():
             CREATE TABLE IF NOT EXISTS scenario_snapshots (
                 scenario_id TEXT NOT NULL,
                 scenario_version TEXT NOT NULL,
+                scenario_type TEXT NOT NULL,
                 title TEXT NOT NULL,
                 domain TEXT NOT NULL,
                 config_hash TEXT NOT NULL,
@@ -47,7 +48,7 @@ def initialize_db():
                 description TEXT,
                 admin_notes TEXT,
                 visibility TEXT NOT NULL,
-                participation_mode TEXT NOT NULL,
+                participation_method TEXT NOT NULL,
                 preference_method TEXT NOT NULL,
                 weighting_method TEXT NOT NULL,
                 ranking_method TEXT NOT NULL,
@@ -65,7 +66,6 @@ def initialize_db():
                 created_at TEXT NOT NULL,
                 updated_by TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                CHECK (status IN ('draft', 'active', 'closed', 'archived')),
                 CHECK (opened_at <= closed_at),
                 CHECK (closed_at <= archived_at),
                 CHECK (created_at <= updated_at),
@@ -76,9 +76,9 @@ def initialize_db():
                 session_id TEXT NOT NULL,
                 stakeholder_group_id TEXT NOT NULL,
                 stakeholder_group_name TEXT NOT NULL,
-                default_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (default_voting_power > 0),
-                current_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (current_voting_power > 0),
-                normalized_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (normalized_voting_power > 0),
+                default_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (default_voting_power >= 0),
+                current_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (current_voting_power >= 0),
+                normalized_voting_power REAL NOT NULL DEFAULT 1.0 CHECK (normalized_voting_power >= 0),
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -103,7 +103,6 @@ def initialize_db():
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE (session_id, participant_id),
-                CHECK (status IN ('invited', 'active', 'submitted', 'disabled', 'expired')),
                 FOREIGN KEY (session_id, stakeholder_group_id) REFERENCES session_stakeholder_groups(session_id, stakeholder_group_id)
             );
 

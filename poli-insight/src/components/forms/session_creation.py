@@ -4,8 +4,19 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from src.utils.scenario_loader import ScenarioBundle
-from src.utils.repositories import create_session
+from src.models.scenario import ScenarioBundle
+from src.models.session import SessionScenario
+from src.models.enum import (
+    SessionStatus,
+    SessionVisibility,
+    WeightingMethod,
+    RankingMethod,
+    PreferenceMethod,
+    ParticipationMethod,
+    AggregationMethod,
+)
+
+from src.repositories.scenario_repository import create_session
 
 def render_session_creation_form(selected_scenario: ScenarioBundle):
     errors = []
@@ -15,33 +26,33 @@ def render_session_creation_form(selected_scenario: ScenarioBundle):
         session_title = st.text_input("Session Title", help="Enter a clear title that helps users understand the purpose of the session.", value=f"{selected_scenario.title} - {datetime.now().strftime('%Y-%m-%d')}")
         session_description = st.text_area("Session Description", help="Describe what the session is evaluating and what participants will be asked to do.")
         
-        visibility_options = ["All","Private", "Public", "Unlisted"]
-        session_visibility = st.radio("Session Visibility", help="Controls who can see the session in the public dashboard.", options=visibility_options, horizontal=True)
+        visibility_options = [SessionVisibility.PRIVATE, SessionVisibility.PUBLIC, SessionVisibility.UNLISTED]
+        session_visibility = st.radio("Session Visibility", help="Controls who can see the session in the public dashboard.", options=visibility_options, format_func=lambda x: x.value, horizontal=True)
 
         admin_notes = st.text_area("Admin Notes", help="Add notes for administrators. These notes are not shown to participants.")
 
         st.markdown("###### Model Configuration")
 
-        weighting_options = ["AHP", "FUZZY AHP"]
-        weighting_method = st.selectbox("Criteria Weighting Method", options=weighting_options, help="Select how the system will calculate the importance of each criterion.")
+        weighting_options = [WeightingMethod.AHP, WeightingMethod.FUZZY_AHP]
+        weighting_method = st.selectbox("Criteria Weighting Method", options=weighting_options, format_func=lambda x: x.value, help="Select how the system will calculate the importance of each criterion.")
 
-        ranking_options = ["TOPSIS", "FUZZY TOPSIS"]
-        ranking_method = st.selectbox("Ranking Method", options=ranking_options, help="Select how the system will rank the available policy alternatives.")
+        ranking_options = [RankingMethod.TOPSIS, RankingMethod.FUZZY_TOPSIS]
+        ranking_method = st.selectbox("Ranking Method", options=ranking_options, format_func=lambda x: x.value, help="Select how the system will rank the available policy alternatives.")
 
-        preference_options = ["5-point scale", "7-point scale"]
-        preference_method = st.selectbox("Preference Method", options=preference_options, help="Select the rating scale participants will use when judging criterion importance.")
+        preference_options = [PreferenceMethod.FIVE_POINT_SCALE, PreferenceMethod.SEVEN_POINT_SCALE]
+        preference_method = st.selectbox("Preference Method", options=preference_options, format_func=lambda x: x.value, help="Select the rating scale participants will use when judging criterion importance.")
 
         st.markdown("###### Access & Submission Controls")
-        participation_options = ["Single Participant", "Multiple Participants"]
-        participation_mode = st.radio("Participation Mode", options=participation_options, horizontal=True, help="Select whether the session collects one response or aggregates responses from multiple participants.")
+        participation_options = [ParticipationMethod.SINGLE_PARTICIPANT, ParticipationMethod.MULTIPLE_PARTICIPANTS]
+        participation_method = st.radio("Participation Method", options=participation_options, horizontal=True, help="Select whether the session collects one response or aggregates responses from multiple participants.")
 
-        aggregation_options = ["Grouped Stakeholder", "Individual"]
+        aggregation_options = [AggregationMethod.GROUP_STAKEHOLDER, AggregationMethod.INDIVIDUAL]
         voting_power_options = ["Scenario Default", "Equal", "Custom"]
 
         aggregation_method = None
         voting_power = None
         voting_power_config = {}
-        if participation_mode == "Multiple Participants":
+        if participation_method == ParticipationMethod.MULTIPLE_PARTICIPANTS:
             with st.container(border=True):
                 st.markdown("###### Aggregation Settings")
                 aggregation_method = st.selectbox("Aggregation Method", options=aggregation_options, help="Select how participant preferences are aggregated before final ranking.")
@@ -91,19 +102,21 @@ def render_session_creation_form(selected_scenario: ScenarioBundle):
                                    disabled=[0]
                     )
         else:
-            aggregation_method = "Individual"
+            aggregation_method = AggregationMethod.INDIVIDUAL
             voting_power = "Equal"
             for group in selected_scenario.stakeholder_groups:
                 voting_power_config[group["id"]] = 1.0
 
-        require_access_code = st.radio("Require Access Code", options=["Yes", "No"], horizontal=True, help="Restricts participation to users with a valid access code.", index=1)
-        
+        # require_access_code = st.radio("Require Access Code", options=["Yes", "No"], horizontal=True, help="Restricts participation to users with a valid access code.", index=1)
+        require_access_code = st.toggle("Require Access Code", help="Restricts participation to users with a valid access code.", value=False)
+
         access_code_type = None
-        if require_access_code == "Yes":
+        if require_access_code:
             with st.container(border=True):
                 access_code_type_options = ["Shared Session Code", "Unique Participant Codes"]
                 access_code_type = st.selectbox("Access Code Type", options=access_code_type_options, help="Select whether all users share one code or each participant receives a unique code.")
-        allow_resubmissions = st.radio("Allow Resubmissions", options=["Yes", "No"], horizontal=True, help="Allows participants to update their responses before the session closes.")
+        # allow_resubmissions = st.radio("Allow Resubmissions", options=["Yes", "No"], horizontal=True, help="Allows participants to update their responses before the session closes.")
+        allow_resubmissions = st.toggle("Allow Resubmissions", help="Allows participants to update their responses before the session closes.", value=False)
 
         st.markdown("###### Session Scheduling")
         start_date_time = st.datetime_input("Start Date & Time", value="now", min_value="now", help="Set when participants can begin submitting responses.")
@@ -128,21 +141,21 @@ def render_session_creation_form(selected_scenario: ScenarioBundle):
                 errors.append("Ranking Method is required.")
             if preference_method not in preference_options:
                 errors.append("Preference Method is required.")
-            if participation_mode not in participation_options:
-                errors.append("Participation Mode is required.")
-            if participation_mode == "Multiple Participant":
+            if participation_method not in participation_options:
+                errors.append("Participation Method is required.")
+            if participation_method == ParticipationMethod.MULTIPLE_PARTICIPANTS:
                 if aggregation_method not in aggregation_options:
                     errors.append("Aggregation Method is required.")
                 if voting_power not in voting_power_options:
                     errors.append("Voting Power is required.")
             
-            if require_access_code not in ["Yes", "No"]:
+            if require_access_code not in [True, False]:
                 errors.append("Require Access Code is required.")
-            if require_access_code == "Yes":
+            if require_access_code == True:
                 if access_code_type not in ["Shared Session Code", "Unique Participant Codes"]:
                     errors.append("Access Code Type is required.")
                     
-            if allow_resubmissions not in ["Yes", "No"]:
+            if allow_resubmissions not in [True, False]:
                 errors.append("Allow Resubmissions is required.")
             if not start_date_time:
                 errors.append("Start Date & Time is required.")
@@ -150,33 +163,48 @@ def render_session_creation_form(selected_scenario: ScenarioBundle):
                 errors.append("End Date & Time is required.")
             if end_date_time <= start_date_time:
                 errors.append("End Date & Time must be after Start Date & Time.")
-            if require_access_code == "Yes" and not access_code_type is None:
+            if require_access_code == True and access_code_type is None:
                 errors.append("Access Code Type is required.")
 
             if errors:
                 for e in errors:
                     st.error(e)
             else:
-                try:     
-                    session_id = create_session(
-                        session_title=session_title,
-                        session_description=session_description,
-                        session_visibility=session_visibility,
+                try:
+                    session_scenario = SessionScenario(
+                        session_id="",
+                        scenario_id=selected_scenario.scenario_id,
+                        scenario_version=selected_scenario.scenario_version,
+                        title=session_title,
+                        description=session_description,
                         admin_notes=admin_notes,
+                        status=SessionStatus.DRAFT,
+                        visibility=session_visibility,
                         weighting_method=weighting_method,
                         ranking_method=ranking_method,
                         preference_method=preference_method,
-                        participation_mode=participation_mode,
+                        participation_method=participation_method,
                         aggregation_method=aggregation_method,
-                        voting_power=voting_power,
-                        voting_power_config=voting_power_config,
-                        require_access_code=True if require_access_code == "Yes" else False,
+                        require_access_code=require_access_code,
                         access_code_type=access_code_type,
-                        allow_resubmissions=True if allow_resubmissions == "Yes" else False,
-                        start_date_time=start_date_time,
-                        end_date_time=end_date_time,
-                        bundle=selected_scenario
+                        allow_resubmissions=allow_resubmissions,
+                        start_at=start_date_time,
+                        end_at=end_date_time,
+                        opened_at=None,
+                        closed_at=None,
+                        archived_at=None,
+                        created_at=datetime.now(),
+                        created_by="admin", # TODO: Add admin info later
+                        updated_at=datetime.now(),
+                        updated_by="admin" # TODO: Add admin info later
                     )
+                    
+                    voting_data = {
+                        "voting_power_option": voting_power,
+                        "voting_config": voting_power_config
+                    }
+
+                    session_id = create_session(session_scenario, selected_scenario, voting_data)
                     st.success(f"Session created with ID: {session_id}")
                 except Exception as e:
                     st.error(f"Error creating session: {e}")
