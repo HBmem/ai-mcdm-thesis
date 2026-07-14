@@ -8,7 +8,7 @@ from src.components.scenario import scenario_label
 from src.components.scenario_preview import render_scenario_preview
 from src.components.forms.session_creation import render_session_creation_form
 from src.components.session_filter import render_session_filter
-from src.components.session_list import render_session_list
+# from src.components.session_list import render_session_list
 from src.components.manage_participant_list import render_manage_participant_list
 from src.components.tables.sessions_with_actions import render_sessions_with_actions
 

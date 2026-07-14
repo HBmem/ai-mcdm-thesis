@@ -16,7 +16,7 @@ from src.models.enum import (
     AggregationMethod,
 )
 
-from src.repositories.scenario_repository import create_session
+from src.repositories.session_repository import create_session
 
 def render_session_creation_form(selected_scenario: ScenarioBundle):
     errors = []
