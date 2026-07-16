@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "poli-insight"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "streamlit",
+    "streamlit_extras",
+    "pydecision",
+    "pandas",
+    "numpy",
+    "sqlalchemy",
+    "alembic",
+    "psycopg[binary]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true

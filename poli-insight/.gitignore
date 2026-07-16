@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Runtime databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Coverage and build output
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
