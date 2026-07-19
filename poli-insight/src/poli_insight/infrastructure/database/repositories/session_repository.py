@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 from datetime import UTC, datetime
 
-
+from poli_insight.application.session_queries import (
+    SessionFilters,
+    SessionPage,
+)
 from poli_insight.domain.sessions import (
     SessionScenario,
     SessionStakeholderGroup,
@@ -83,34 +86,202 @@ class SqlAlchemySessionRepository:
     
     def get(
         self,
-        session_id:str,
+        session_id: str,
     ) -> SessionScenario | None:
-        session_row = self._database_session(
-            SessionScenarioRow,
-            session_id,
+        statement = (
+            select(SessionScenarioRow)
+            .options(
+                selectinload(
+                    SessionScenarioRow.stakeholder_groups
+                )
+            )
+            .where(
+                SessionScenarioRow.session_id == session_id
+            )
+        )
+
+        session_row = (
+            self._database_session.execute(statement)
+            .scalar_one_or_none()
         )
 
         if session_row is None:
             return None
-        
-        group_rows = self._database_session.scalars(
-            select(SessionStakeholderGroupRow)
-            .where(
-                SessionStakeholderGroupRow.session_id == session_id
-            )
-            .order_by(
-                SessionStakeholderGroupRow.stakeholder_group_id
-            )
-        ).all()
 
         stakeholder_groups = [
             self._group_to_domain(row)
-            for row in group_rows
+            for row in session_row.stakeholder_groups
         ]
 
         return self._session_to_domain(
             session_row,
             stakeholder_groups,
+        )
+    
+    def save(
+        self,
+        session: SessionScenario,
+    ) -> None:
+        row = self._database_session.get(
+            SessionScenarioRow,
+            session.session_id,
+        )
+
+        if row is None:
+            raise LookupError(
+                f"Session {session.session_id!r} "
+                "does not exist."
+            )
+        
+        row.title = session.title
+        row.description = session.description
+        row.admin_notes = session.admin_notes
+        row.visibility = session.visibility.value
+
+        row.require_access_code = (
+            session.require_access_code
+        )
+        row.access_code_type = session.access_code_type
+        row.allow_resubmissions = (
+            session.allow_resubmissions
+        )
+
+        row.start_at = session.start_at
+        row.end_at = session.end_at
+        row.status = session.status.value
+
+        row.opened_at = session.opened_at
+        row.closed_at = session.closed_at
+        row.archived_at = session.archived_at
+
+        row.updated_at = session.updated_at
+        row.updated_by = session.updated_by
+    
+    def delete(
+        self,
+        session_id: str,
+    ) -> bool:
+        row = self._database_session.get(
+            SessionScenarioRow,
+            session_id,
+        )
+
+        if row is None:
+            return False
+
+        self._database_session.delete(row)
+        return True
+    
+    def list_filtered(
+        self,
+        filters: SessionFilters,
+        *,
+        page: int,
+        page_size: int,
+    ) -> SessionPage:
+        conditions = []
+
+        if filters.scenario_id is not None:
+            conditions.append(
+                SessionScenarioRow.scenario_id
+                == filters.scenario_id
+            )
+
+        if filters.scenario_version is not None:
+            conditions.append(
+                SessionScenarioRow.scenario_version
+                == filters.scenario_version
+            )
+
+        if filters.status is not None:
+            conditions.append(
+                SessionScenarioRow.status
+                == filters.status.value
+            )
+
+        if filters.visibility is not None:
+            conditions.append(
+                SessionScenarioRow.visibility
+                == filters.visibility.value
+            )
+
+        if filters.weighting_method is not None:
+            conditions.append(
+                SessionScenarioRow.weighting_method
+                == filters.weighting_method.value
+            )
+
+        if filters.ranking_method is not None:
+            conditions.append(
+                SessionScenarioRow.ranking_method
+                == filters.ranking_method.value
+            )
+
+        if filters.preference_scale is not None:
+            conditions.append(
+                SessionScenarioRow.preference_scale
+                == filters.preference_scale.value
+            )
+
+        if filters.require_access_code is not None:
+            conditions.append(
+                SessionScenarioRow.require_access_code
+                == filters.require_access_code
+            )
+
+        if filters.allow_resubmissions is not None:
+            conditions.append(
+                SessionScenarioRow.allow_resubmissions
+                == filters.allow_resubmissions
+            )
+
+        count_statement = (
+            select(func.count())
+            .select_from(SessionScenarioRow)
+            .where(*conditions)
+        )
+
+        total = (
+            self._database_session.scalar(count_statement)
+            or 0
+        )
+
+        statement = (
+            select(SessionScenarioRow)
+            .options(
+                selectinload(
+                    SessionScenarioRow.stakeholder_groups
+                )
+            )
+            .where(*conditions)
+            .order_by(
+                SessionScenarioRow.updated_at.desc(),
+                SessionScenarioRow.session_id.asc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+
+        rows = self._database_session.scalars(
+            statement
+        ).all()
+
+        sessions = tuple(
+            self._session_to_domain(
+                row,
+                [
+                    self._group_to_domain(group)
+                    for group in row.stakeholder_groups
+                ],
+            )
+            for row in rows
+        )
+
+        return SessionPage(
+            items=sessions,
+            total=total,
+            page=page,
+            page_size=page_size,
         )
     
     @staticmethod

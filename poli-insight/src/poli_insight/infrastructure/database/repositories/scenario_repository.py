@@ -1,4 +1,7 @@
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
+
+from datetime import datetime, UTC
 
 from poli_insight.domain.enums import (
     ScenarioType
@@ -72,7 +75,7 @@ class SqlAlchemyScenarioRepository:
             status=row.status,
             config_hash=row.config_hash,
             config_snapshot_json=row.config_snapshot_json,
-            created_at=row.created_at,
+            created_at=_as_utc(row.created_at),
         )
 
     def get_snapshot(
@@ -89,3 +92,41 @@ class SqlAlchemyScenarioRepository:
             return None
 
         return self._to_domain(row)
+    
+    def get_many(
+        self,
+        identities: set[tuple[str, str]],
+    ) -> dict[tuple[str, str], ScenarioSnapshot]:
+        if not identities:
+            return {}
+
+        statement = (
+            select(ScenarioSnapshotRow)
+            .where(
+                tuple_(
+                    ScenarioSnapshotRow.scenario_id,
+                    ScenarioSnapshotRow.scenario_version,
+                ).in_(identities)
+            )
+        )
+
+        rows = self._database_session.scalars(
+            statement
+        ).all()
+
+        return {
+            (row.scenario_id, row.scenario_version):
+                self._to_domain(row)
+            for row in rows
+        }
+
+def _as_utc(
+    value: datetime | None,
+) -> datetime | None:
+    if value is None:
+        return None
+
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+
+    return value.astimezone(UTC)

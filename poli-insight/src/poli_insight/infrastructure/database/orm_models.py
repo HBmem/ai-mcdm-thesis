@@ -1,7 +1,15 @@
+from __future__ import annotations
+
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    String,
+    Text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from poli_insight.infrastructure.database.base import Base
 
@@ -48,8 +56,25 @@ class ScenarioSnapshotRow(Base):
         nullable=False,
     )
 
+    sessions: Mapped[list[SessionScenarioRow]] = relationship(
+        "SessionScenarioRow",
+        back_populates="snapshot",
+        lazy="raise",
+    )
+
 class SessionScenarioRow(Base):
     __tablename__ = "sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["scenario_id", "scenario_version"],
+            [
+                "scenario_snapshots.scenario_id",
+                "scenario_snapshots.scenario_version",
+            ],
+            name="fk_sessions_scenario_snapshot",
+            ondelete="RESTRICT",
+        ),
+    )
 
     session_id: Mapped[str] = mapped_column(
         String(100),
@@ -156,13 +181,35 @@ class SessionScenarioRow(Base):
         nullable=False,
     )
 
+    snapshot: Mapped[ScenarioSnapshotRow] = relationship(
+        "ScenarioSnapshotRow",
+        back_populates="sessions",
+        lazy="raise",
+    )
+
+    stakeholder_groups: Mapped[
+        list[SessionStakeholderGroupRow]
+    ] = relationship(
+        "SessionStakeholderGroupRow",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="raise",
+    )
+
 class SessionStakeholderGroupRow(Base):
     __tablename__ = "session_stakeholder_groups"
 
     session_id: Mapped[str] = mapped_column(
         String(100),
+        ForeignKey(
+            "sessions.session_id",
+            name="fk_session_stakeholder_groups_session",
+            ondelete="CASCADE",
+        ),
         primary_key=True,
     )
+
     stakeholder_group_id: Mapped[str] = mapped_column(
         String(100),
         primary_key=True,
@@ -197,4 +244,10 @@ class SessionStakeholderGroupRow(Base):
     updated_by: Mapped[str] = mapped_column(
         String(100),
         nullable=False
+    )
+
+    session: Mapped[SessionScenarioRow] = relationship(
+        "SessionScenarioRow",
+        back_populates="stakeholder_groups",
+        lazy="raise",
     )

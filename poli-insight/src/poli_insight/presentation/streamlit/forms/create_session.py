@@ -19,7 +19,7 @@ from poli_insight.domain.scenario import ScenarioBundle
 def render(
     scenario: ScenarioBundle,
     actor_id: str,
-    app_timezone: "str",
+    app_timezone: str,
 ) -> CreateSessionCommand | None:
     errors = []
 

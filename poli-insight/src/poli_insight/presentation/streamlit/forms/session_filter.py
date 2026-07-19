@@ -2,43 +2,66 @@ import streamlit as st
 
 from typing import Any
 
+from poli_insight.domain.enums import (
+    PreferenceScale,
+    RankingMethod,
+    SessionStatus,
+    SessionVisibility,
+    WeightingMethod,
+)
+
 def render(
     session_state_key: str,
     session_status: str,
-    session_visibility: str,
+    visibility: str,
     weighting_method: str,
     ranking_method: str,
-    preference_method: str,
+    preference_scale: str,
     available_status: list[str] | None = None,
     available_visibility: list[str] | None = None,
     available_weighting_methods: list[str] | None = None,
     available_ranking_methods: list[str] | None = None,
-    available_preference_methods: list[str] | None = None,
+    available_preference_scales: list[str] | None = None,
     require_access_code: bool = False,
     allow_resubmission: bool = False
 ) -> dict[str, Any]:
     if available_status is None:
-        available_status = ["All","Open", "Draft", "Closed", "Archived"]
+        available_status = [
+            "All",
+            *(value.value for value in SessionStatus),
+        ]
 
     if available_visibility is None:
-        available_visibility = ["All", "Public", "Private"]
+        available_visibility = [
+            "All",
+            *(value.value for value in SessionVisibility),
+        ]
 
     if available_weighting_methods is None:
-        available_weighting_methods = ["All", "AHP", "FUZZY AHP"]
+        available_weighting_methods = [
+            "All",
+            *(value.value for value in WeightingMethod),
+        ]
 
     if available_ranking_methods is None:
-        available_ranking_methods = ["All", "TOPSIS", "FUZZY TOPSIS"]
+        available_ranking_methods = [
+            "All",
+            *(value.value for value in RankingMethod),
+        ]
 
-    if available_preference_methods is None:
-        available_preference_methods = ["All", "5-point scale", "7-point scale"]
+    if available_preference_scales is None:
+        available_preference_scales = [
+            "All",
+            *(value.value for value in PreferenceScale),
+        ]
 
     if session_state_key not in st.session_state:
         st.session_state[session_state_key] = {
             "status": session_status,
-            "visibility": session_visibility,
+            "visibility": visibility,
             "weighting_method": weighting_method,
             "ranking_method": ranking_method,
-            "preference_method": preference_method,
+            "preference_scale": preference_scale,
             "require_access_code": require_access_code,
             "allow_resubmission": allow_resubmission
         }
@@ -59,12 +82,12 @@ def render(
         with col1:
             filters["status"] = st.selectbox(key=f"{session_state_key}_status", label="Status", options=available_status, index=available_status.index(session_status) if session_status in available_status else 0)
 
-            filters["weighting_method"] = st.selectbox(key=f"{session_state_key}_weighting_method", label="Weighting Method", options=available_weighting_methods or ["AHP", "FUZZY AHP"], index=(available_weighting_methods or ["AHP", "FUZZY AHP"]).index(weighting_method) if weighting_method in (available_weighting_methods or ["AHP", "FUZZY AHP"]) else 0)
+            filters["weighting_method"] = st.selectbox(key=f"{session_state_key}_weighting_method", label="Weighting Method", options=available_weighting_methods, index=(available_weighting_methods).index(weighting_method) if weighting_method in (available_weighting_methods) else 0)
         
         with col2:
-            filters["session_visibility"] = st.selectbox(key=f"{session_state_key}_visibility", label="Visibility", options=available_visibility, index=available_visibility.index(session_visibility) if session_visibility in available_visibility else 0)
+            filters["visibility"] = st.selectbox(key=f"{session_state_key}_visibility", label="Visibility", options=available_visibility, index=available_visibility.index(visibility) if visibility in available_visibility else 0)
 
-            filters["ranking_method"] = st.selectbox(key=f"{session_state_key}_ranking_method", label="Ranking Method", options=available_ranking_methods or ["TOPSIS", "FUZZY TOPSIS"], index=(available_ranking_methods or ["TOPSIS", "FUZZY TOPSIS"]).index(ranking_method) if ranking_method in (available_ranking_methods or ["TOPSIS", "FUZZY TOPSIS"]) else 0)
+            filters["ranking_method"] = st.selectbox(key=f"{session_state_key}_ranking_method", label="Ranking Method", options=available_ranking_methods, index=(available_ranking_methods).index(ranking_method) if ranking_method in (available_ranking_methods) else 0)
 
         with col3:
             # with st.container():
@@ -72,6 +95,7 @@ def render(
             #     filters["allow_resubmissions"] = st.toggle("Allow Resubmissions", value=allow_resubmission)
 
             st.space(size="large")
-            filters["preference_method"] = st.selectbox(key=f"{session_state_key}_preference_method", label="Preference Method", options=available_preference_methods or ["5-point scale", "7-point scale"], index=(available_preference_methods or ["5-point scale", "7-point scale"]).index(preference_method) if preference_method in (available_preference_methods or ["5-point scale", "7-point scale"]) else 0)
+            filters["preference_scale"] = st.selectbox(key=f"{session_state_key}_preference_scale", label="Preference Scale", options=available_preference_scales, index=(available_preference_scales).index(preference_scale) if preference_scale in (available_preference_scales) else 0)
 
         return filters
+    

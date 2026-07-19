@@ -244,6 +244,71 @@ class SessionScenario:
         self.status = SessionStatus.ARCHIVED
         self.archived_at = timestamp
         self._mark_updated(actor_id, timestamp)
+    
+    def update_details(
+        self,
+        *,
+        title: str,
+        description: str | None,
+        admin_notes: str | None,
+        visibility: SessionVisibility,
+        end_at: datetime | None,
+        actor_id: str,
+        now: datetime | None = None,
+    ) -> None:
+        timestamp = now or datetime.now(UTC)
+
+        _require_aware_datetime(
+            timestamp,
+            "now",
+        )
+        _require_aware_datetime(
+            end_at,
+            "end_at",
+        )
+
+        normalized_title = title.strip()
+
+        if not normalized_title:
+            raise SessionRuleViolation(
+                "Session title cannot be empty."
+            )
+
+        if self.status == SessionStatus.ARCHIVED:
+            raise SessionRuleViolation(
+                "An archived session cannot be edited."
+            )
+
+        if (
+            self.start_at is not None
+            and end_at is not None
+            and end_at <= self.start_at
+        ):
+            raise SessionRuleViolation(
+                "Session end time must be later "
+                "than its start time."
+            )
+
+        if (
+            self.status == SessionStatus.OPEN
+            and end_at is not None
+            and end_at <= timestamp
+        ):
+            raise SessionRuleViolation(
+                "An open session's end time must "
+                "be in the future."
+            )
+
+        self.title = normalized_title
+        self.description = description
+        self.admin_notes = admin_notes
+        self.visibility = visibility
+        self.end_at = end_at
+
+        self._mark_updated(
+            actor_id,
+            timestamp,
+        )
 
     def can_accept_submissions(
         self,

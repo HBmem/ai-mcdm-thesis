@@ -18,17 +18,16 @@ class SqlAlchemyUnitOfWork:
         self._session_factory = session_factory
 
     def __enter__(self) -> "SqlAlchemyUnitOfWork":
-        ...
-        # self.database_session = self._session_factory()
+        self.database_session = self._session_factory()
 
-        # self.sessions = SqlAlchemySessionRepository(
-        #     self.database_session
-        # )
-        # self.scenarios = SqlAlchemyScenarioRepository(
-        #     self.database_session
-        # )
+        self.sessions = SqlAlchemySessionRepository(
+            self.database_session
+        )
+        self.scenarios = SqlAlchemyScenarioRepository(
+            self.database_session
+        )
 
-        # return self
+        return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         try:

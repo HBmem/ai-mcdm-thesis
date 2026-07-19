@@ -10,8 +10,6 @@ from poli_insight.domain.sessions import SessionScenario
 class ScenarioSnapshotNotFoundError(LookupError):
     pass
 
-class SessionScenarioNotFoundError(LookupError):
-    pass
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 
@@ -38,50 +36,9 @@ class ScenarioSnapshotService:
             )
 
         return snapshot
-
-    def get_session(
-        self,
-        session_id: str,
-    ) -> SessionScenario:
-        with self._unit_of_work_factory() as unit_of_work:
-            session = unit_of_work.sessions.get(session_id)
-
-        if session is None:
-            raise SessionScenarioNotFoundError(
-                f"Session {session_id!r} was not found."
-            )
-
-        return session
+    
     
 @dataclass(frozen=True, slots=True)
 class SessionScenarioDetails:
     snapshot: ScenarioSnapshot
     session: SessionScenario
-
-    def get_session_details(
-        self,
-        session_id: str,
-    ) -> SessionScenarioDetails:
-        with self._unit_of_work_factory() as unit_of_work:
-            session = unit_of_work.sessions.get(session_id)
-
-            if session is None:
-                raise SessionScenarioNotFoundError(
-                    f"Session {session_id!r} was not found."
-                )
-
-            snapshot = unit_of_work.scenarios.get_snapshot(
-                session.scenario_id,
-                session.scenario_version,
-            )
-
-            if snapshot is None:
-                raise ScenarioSnapshotNotFoundError(
-                    f"Snapshot for session {session_id!r} "
-                    f"was not found."
-                )
-
-            return SessionScenarioDetails(
-                snapshot=snapshot,
-                session=session,
-            )

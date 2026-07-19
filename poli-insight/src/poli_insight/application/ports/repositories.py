@@ -8,6 +8,10 @@ from poli_insight.domain.sessions import (
     SessionStakeholderGroup,
 )
 from poli_insight.domain.scenario import ScenarioSnapshot
+from poli_insight.application.session_queries import (
+    SessionFilters,
+    SessionPage,
+)
 
 class SessionRepository(Protocol):
     def add(
@@ -23,6 +27,27 @@ class SessionRepository(Protocol):
     ) -> SessionScenario | None:
         ...
 
+    def list_filtered(
+        self,
+        filters: SessionFilters,
+        *,
+        page: int,
+        page_size: int,
+    ) -> SessionPage:
+        ...
+
+    def save(
+        self,
+        session: SessionScenario,
+    ) -> None:
+        ...
+
+    def delete(
+        self,
+        session_id: str,
+    ) -> bool:
+        ...
+
 class ScenarioRepository(Protocol):
     def ensure_snapshot(
         self,
@@ -35,4 +60,10 @@ class ScenarioRepository(Protocol):
         scenario_id: str,
         scenario_version: str,
     ) -> ScenarioSnapshot | None:
+        ...
+    
+    def get_many(
+        self,
+        identities: set[tuple[str, str]],
+    ) -> dict[tuple[str, str], ScenarioSnapshot]:
         ...

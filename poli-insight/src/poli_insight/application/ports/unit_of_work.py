@@ -11,7 +11,7 @@ class UnitOfWork(Protocol):
     sessions: SessionRepository
     scenarios: ScenarioRepository
 
-    def ___enter__(self) -> "UnitOfWork":
+    def __enter__(self) -> "UnitOfWork":
         ...
     
     def __exit__(self, exc_type, exc, tb) -> None:

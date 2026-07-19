@@ -37,3 +37,13 @@ class CreateSessionCommand:
 
     voting_power: Mapping[str, float]
     actor_id: str
+
+@dataclass(frozen=True)
+class UpdateSessionCommand:
+    session_id: str
+    title: str
+    description: str | None
+    admin_notes: str | None
+    visibility: SessionVisibility
+    end_at: datetime | None
+    actor_id: str
