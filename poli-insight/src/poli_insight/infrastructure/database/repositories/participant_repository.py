@@ -56,8 +56,31 @@ class SQLAlchemyParticipantRepository:
             participant_row
         )
 
-    def save(self, participant: Participant) -> None:
-        ...
+    def save(
+        self,
+        participant: Participant,
+    ) -> None:
+        row = self._database_session.get(
+            ParticipantRow,
+            participant.participant_id,
+        )
+
+        if row is None:
+            raise LookupError(
+                f"Participant {participant.participant_id!r} does not exist."
+            )
+
+        row.stakeholder_group_id = participant.stakeholder_group_id
+        row.name = participant.name
+        row.alias = participant.alias
+    
+        row.access_status = participant.access_status
+        row.joined_at = participant.joined_at
+        row.disabled_at = participant.disabled_at
+        row.disabled_by = participant.disabled_by
+    
+        row.updated_at = participant.updated_at
+        row.updated_by = participant.updated_by
 
     def list_for_session(
         self,

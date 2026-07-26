@@ -133,6 +133,11 @@ class SessionRow(Base):
         nullable=False,
     )
 
+    preference_elicitation_method: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
     require_access_code: Mapped[bool] = mapped_column(
         nullable=False,
     )

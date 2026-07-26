@@ -9,6 +9,7 @@ from poli_insight.domain.enums import (
     SessionStatus,
     SessionVisibility,
     WeightingMethod,
+    PreferenceElicitationMethod,
 )
 from poli_insight.domain.sessions import Session
 from poli_insight.domain.scenario import ScenarioSnapshot
@@ -24,6 +25,7 @@ class SessionFilters:
     weighting_method: WeightingMethod | None = None
     ranking_method: RankingMethod | None = None
     preference_scale: PreferenceScale | None = None
+    preference_elicitation_method: PreferenceElicitationMethod | None = None
     require_access_code: bool | None = None
     allow_resubmissions: bool | None = None
 

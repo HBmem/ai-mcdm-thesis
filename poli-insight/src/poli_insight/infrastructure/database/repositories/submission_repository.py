@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 
-from datetime import UTC, datetime
 from collections.abc import Sequence
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from poli_insight.application.utils import _as_utc
 from poli_insight.domain.enums import SubmissionStatus
 from poli_insight.domain.submissions import Submission
 from poli_insight.infrastructure.database.orm_models import SubmissionRow
@@ -84,11 +84,8 @@ class SQLAlchemySubmissionRepository:
                 f"Submission {submission.submission_id!r} does not exists."
             )
 
-        # row.attempt_number=submission.attempt_number
-        # row.previous_submission_id=submission.previous_submission_id
-
         row.status=submission.status.value
-        row.answers_json=json.dump(
+        row.answers_json=json.dumps(
             submission.answers,
             sort_keys=True,
             separators=(",",":"),
@@ -104,11 +101,15 @@ class SQLAlchemySubmissionRepository:
         row.withdrawn_at=submission.withdrawn_at
         row.withdrawn_by=submission.withdrawn_by
     
-        # row.created_at=submission.created_at
-        # row.created_by=submission.created_by
         row.updated_at=submission.updated_at
         row.updated_by=submission.updated_by
 
+    def flush(
+        self
+    ) -> None:
+        self.database_session.flush()
+
+    # Should not be necessary since old submissions are saved but i worked on it for practice
     def delete(
         self,
         submission_id: str,
@@ -123,6 +124,65 @@ class SQLAlchemySubmissionRepository:
 
         self._database_session.delete(row)
         return True
+
+    def get_draft(
+        self,
+        participant_id: str,
+    ) -> Submission | None:
+        statement = (
+            select(SubmissionRow)
+            .where(
+                SubmissionRow.participant_id == participant_id,
+                SubmissionRow.status == SubmissionStatus.DRAFT.value,
+            )
+        )
+
+        submission_row = (
+            self._database_session.execute(statement)
+            .scalar_one_or_none()
+        )
+
+        if submission_row is None:
+            return None
+
+        return self._to_domain(submission_row)
+    
+    def get_effective(
+        self,
+        participant_id: str,
+    ) -> Submission | None:
+        statement = (
+            select(SubmissionRow)
+            .where(
+                SubmissionRow.participant_id == participant_id,
+                SubmissionRow.status == SubmissionStatus.SUBMITTED.value,
+            )
+        )
+
+        submission_row = (
+            self._database_session.execute(statement)
+            .scalar_one_or_none()
+        )
+
+        if submission_row is None:
+            return None
+
+        return self._to_domain(submission_row)
+
+    def next_attempt_number(
+        self,
+        participant_id: str,
+    ) -> int:
+        current_max = self._database_session.scalar(
+            select(
+                func.max(SubmissionRow.attempt_number)
+            )
+            .where(
+                SubmissionRow.participant_id == participant_id
+            )
+        )
+
+        return int(current_max or 0) + 1
 
     def list_current_for_participants(
         self,
@@ -180,14 +240,3 @@ class SQLAlchemySubmissionRepository:
             updated_at=_as_utc(row.updated_at),
             updated_by=row.updated_by,
         )
-
-def _as_utc(
-    value: datetime | None,
-) -> datetime | None:
-    if value is None:
-        return None
-
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-
-    return value.astimezone(UTC)

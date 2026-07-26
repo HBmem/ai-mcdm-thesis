@@ -41,6 +41,9 @@ class SqlAlchemyUnitOfWork:
         self.submissions = SQLAlchemySubmissionRepository(
             self.database_session
         )
+        self.submission_validations = SQLAlchemySubmissionValidationRepository(
+            self.database_session
+        )
         self.submission_dashboard = SQLAlchemySubmissionDashboardQueryRepository(
             self.database_session
         )

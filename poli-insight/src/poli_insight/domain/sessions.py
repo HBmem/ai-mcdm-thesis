@@ -13,6 +13,7 @@ from poli_insight.domain.enums import (
     SessionStatus,
     SessionVisibility,
     WeightingMethod,
+    PreferenceElicitationMethod,
 )
 
 class SessionRuleViolation(ValueError):
@@ -89,6 +90,7 @@ class Session:
     weighting_method: WeightingMethod
     ranking_method: RankingMethod
     aggregation_method: AggregationMethod
+    preference_elicitation_method: PreferenceElicitationMethod
 
     require_access_code: bool
     access_code_type: str | None
@@ -112,10 +114,6 @@ class Session:
         default_factory=list
     )
 
-    # participants: list[Participant] = field(
-    #     default_factory=list
-    # )
-
     def __post_init__(self) -> None:
         self._validate_identity()
         self._validate_schedule()
@@ -138,6 +136,7 @@ class Session:
         weighting_method: WeightingMethod,
         ranking_method: RankingMethod,
         aggregation_method: AggregationMethod,
+        preference_elicitation_method: PreferenceElicitationMethod,
         require_access_code: bool,
         access_code_type: str | None,
         allow_resubmissions: bool,
@@ -165,6 +164,7 @@ class Session:
             weighting_method=weighting_method,
             ranking_method=ranking_method,
             aggregation_method=aggregation_method,
+            preference_elicitation_method=preference_elicitation_method,
             require_access_code=require_access_code,
             access_code_type=access_code_type,
             allow_resubmissions=allow_resubmissions,

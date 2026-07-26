@@ -26,6 +26,7 @@ from poli_insight.domain.enums import (
     SessionStatus,
     SessionVisibility,
     WeightingMethod,
+    PreferenceElicitationMethod,
 )
 
 class SqlAlchemySessionRepository:
@@ -51,6 +52,7 @@ class SqlAlchemySessionRepository:
                 weighting_method=session.weighting_method.value,
                 ranking_method=session.ranking_method.value,
                 aggregation_method=session.aggregation_method.value,
+                preference_elicitation_method=session.preference_elicitation_method,
                 require_access_code=session.require_access_code,
                 access_code_type=session.access_code_type,
                 allow_resubmissions=session.allow_resubmissions,
@@ -328,6 +330,9 @@ class SqlAlchemySessionRepository:
             ),
             aggregation_method=AggregationMethod(
                 row.aggregation_method
+            ),
+            preference_elicitation_method=PreferenceElicitationMethod(
+                row.preference_elicitation_method
             ),
             require_access_code=row.require_access_code,
             access_code_type=row.access_code_type,

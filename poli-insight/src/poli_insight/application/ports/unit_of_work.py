@@ -7,6 +7,7 @@ from poli_insight.application.ports.repositories import (
     SessionRepository,
     ParticipantRepository,
     SubmissionRepository,
+    SubmissionValidationRepository,
     SubmissionDashboardQueryRepository
 )
 
@@ -15,6 +16,7 @@ class UnitOfWork(Protocol):
     scenarios: ScenarioRepository
     participants: ParticipantRepository
     submissions: SubmissionRepository
+    submission_validations: SubmissionValidationRepository
     submission_dashboard: SubmissionDashboardQueryRepository
 
     def __enter__(self) -> "UnitOfWork":

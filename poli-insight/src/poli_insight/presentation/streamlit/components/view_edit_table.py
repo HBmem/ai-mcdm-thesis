@@ -168,18 +168,6 @@ def render(
                 "No sessions match the selected filters."
             )
 
-        # details_heading, stats_heading, actions_heading = (
-        #     st.columns(
-        #         [4, 5, 4],
-        #         gap="small",
-        #         vertical_alignment="center",
-        #     )
-        # )
-
-        # details_heading.markdown("Session")
-        # stats_heading.markdown("")
-        # actions_heading.markdown("Actions")
-
         for item in result.items:
             _render_session_row(
                 session=item.session,

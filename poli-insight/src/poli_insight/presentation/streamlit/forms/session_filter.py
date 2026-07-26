@@ -8,6 +8,7 @@ from poli_insight.domain.enums import (
     SessionStatus,
     SessionVisibility,
     WeightingMethod,
+    PreferenceElicitationMethod
 )
 
 def render(
@@ -16,12 +17,14 @@ def render(
     visibility: str,
     weighting_method: str,
     ranking_method: str,
+    preference_elicitation_method: str,
     preference_scale: str,
     available_status: list[str] | None = None,
     available_visibility: list[str] | None = None,
     available_weighting_methods: list[str] | None = None,
     available_ranking_methods: list[str] | None = None,
     available_preference_scales: list[str] | None = None,
+    available_preference_elicitation_methods: list[str] | None = None,
     require_access_code: bool = False,
     allow_resubmission: bool = False
 ) -> dict[str, Any]:
@@ -55,6 +58,12 @@ def render(
             *(value.value for value in PreferenceScale),
         ]
 
+    if available_preference_elicitation_methods is None:
+            available_preference_elicitation_methods = [
+                "All",
+                *(value.value for value in PreferenceElicitationMethod),
+            ]
+
     if session_state_key not in st.session_state:
         st.session_state[session_state_key] = {
             "status": session_status,
@@ -62,6 +71,7 @@ def render(
             "weighting_method": weighting_method,
             "ranking_method": ranking_method,
             "preference_scale": preference_scale,
+            "preference_elicitation_method": preference_elicitation_method,
             "require_access_code": require_access_code,
             "allow_resubmission": allow_resubmission
         }
@@ -92,12 +102,18 @@ def render(
             filters["ranking_method"] = st.selectbox(key=f"{session_state_key}_ranking_method", label="Ranking Method", options=available_ranking_methods, index=(available_ranking_methods).index(ranking_method) if ranking_method in (available_ranking_methods) else 0)
 
         with col3:
-            # with st.container():
-            #     filters["require_access_code"] = st.toggle("Require Access Code", value=require_access_code)
-            #     filters["allow_resubmissions"] = st.toggle("Allow Resubmissions", value=allow_resubmission)
-
-            st.space(size="large")
-            filters["preference_scale"] = st.selectbox(key=f"{session_state_key}_preference_scale", label="Preference Scale", options=available_preference_scales, index=(available_preference_scales).index(preference_scale) if preference_scale in (available_preference_scales) else 0)
+            filters["preference_elicitation_method"] = st.selectbox(
+                key=f"{session_state_key}_preference_elicitation_method",
+                label="Preference Elicitation Method",
+                options=available_preference_elicitation_methods,
+                index=(available_preference_elicitation_methods).index(preference_elicitation_method) if preference_elicitation_method in (available_preference_elicitation_methods) else 0,
+            )
+            filters["preference_scale"] = st.selectbox(
+                key=f"{session_state_key}_preference_scale",
+                label="Preference Scale",
+                options=available_preference_scales,
+                index=(available_preference_scales).index(preference_scale) if preference_scale in (available_preference_scales) else 0,
+            )
 
         return filters
     

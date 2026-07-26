@@ -11,7 +11,8 @@ from poli_insight.domain.enums import (
     RankingMethod,
     SessionVisibility,
     WeightingMethod,
-    ParticipantStatus
+    ParticipantStatus,
+    PreferenceElicitationMethod
 )
 from poli_insight.domain.scenario import ScenarioBundle
 
@@ -28,6 +29,7 @@ class CreateSessionCommand:
     weighting_method: WeightingMethod
     ranking_method: RankingMethod
     aggregation_method: AggregationMethod
+    preference_elicitation_method: PreferenceElicitationMethod
 
     require_access_code: bool
     access_code_type: str | None

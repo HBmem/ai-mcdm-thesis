@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from poli_insight.domain.enums import SubmissionStatus
 
 from poli_insight.application.dto import CreateParticipantCommand
+from poli_insight.application.utils import _new_id
 from poli_insight.application.ports.unit_of_work import UnitOfWork
 from poli_insight.application.participant_queries import (
     ParticipantPage,
@@ -39,7 +40,34 @@ class ParticipantService:
 
         if not participant_id:
             raise CreateParticipantError("Participant ID is required.")
-        
+
+        if not command.name.strip() and not command.alias.strip():
+            raise CreateParticipantError(
+                "Participant must have a name or an alias"
+            )
+
+        now = datetime.now(UTC)
+        participant_id = _new_id("participant")
+        participant = Participant(
+            participant_id=participant_id,
+            session_id=command.session_id,
+            user_id=command.user_id,
+            stakeholder_group_id= command.stakeholder_group_id,
+            name=command.name,
+            alias=command.alias,
+            access_status=command.access_status,
+            created_at=now,
+            created_by=command.created_by,
+            updated_at=now,
+            updated_by=command.updated_by,
+        )
+
+        with self._unit_of_work_factory() as unit_of_work:
+            unit_of_work.participants.add(participant)
+            unit_of_work.commit()
+            
+        return participant_id
+    
     def get_participant(
         self,
         participant_id: str,

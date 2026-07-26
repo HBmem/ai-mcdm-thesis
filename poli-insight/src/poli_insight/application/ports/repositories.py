@@ -114,21 +114,21 @@ class SubmissionRepository(Protocol):
         submission: Submission,
     ) -> None:
         ...
+        
     def get(
         self,
         submission_id: str,
     ) -> Submission | None:
         ...
 
-    def list_current_for_participants(
-        self,
-        participant_ids: set[str],
-    ) -> Sequence[Submission]:
-        ...
-
     def save(
         self,
         submission: Submission,
+    ) -> None:
+        ...
+
+    def flush(
+        self
     ) -> None:
         ...
 
@@ -144,9 +144,21 @@ class SubmissionRepository(Protocol):
     ) -> Submission | None:
         ...
 
+    def next_attempt_number(
+        self,
+        participant_id: str,
+    ) -> int:
+        ...
+
     def list_for_participant(
         self,
         participant_id: str,
+    ) -> Sequence[Submission]:
+        ...
+
+    def list_current_for_participants(
+        self,
+        participant_ids: set[str],
     ) -> Sequence[Submission]:
         ...
 

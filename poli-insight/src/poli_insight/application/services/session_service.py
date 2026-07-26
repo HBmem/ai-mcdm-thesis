@@ -100,6 +100,7 @@ class SessionService:
             weighting_method=command.weighting_method,
             ranking_method=command.ranking_method,
             aggregation_method=command.aggregation_method,
+            preference_elicitation_method=command.preference_elicitation_method,
             require_access_code=command.require_access_code,
             access_code_type=command.access_code_type,
             allow_resubmissions=command.allow_resubmissions,

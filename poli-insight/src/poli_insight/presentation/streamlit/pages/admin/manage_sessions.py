@@ -28,6 +28,7 @@ from poli_insight.domain.enums import (
     SessionStatus,
     SessionVisibility,
     WeightingMethod,
+    PreferenceElicitationMethod,
 )
 
 def render(container: ApplicationContainer) -> None:
@@ -107,6 +108,7 @@ def _render_view_edit_sessions_tab(
         weighting_method=None,
         ranking_method=None,
         preference_scale=None,
+        preference_elicitation_method=None,
     )
 
     session_filters = SessionFilters(
@@ -143,14 +145,21 @@ def _render_view_edit_sessions_tab(
                 filters["preference_scale"]
             )
         ),
+        preference_elicitation_method=(
+            None
+            if filters["preference_elicitation_method"] == "All"
+            else PreferenceElicitationMethod(
+                filters["preference_elicitation_method"]
+            )
+        ),
     )
 
     render_view_edit_table(
         session_service=container.session_service,
         filters=session_filters,
+        # actor_id=current_user.user_id
         actor_id="dev-admin",
         app_timezone=container.settings.app_timezone
-        # actor_id=current_user.user_id
     )
 
 def _render_manage_participants_tab(
