@@ -22,8 +22,8 @@ class RankingMethod(StrEnum):
     FUZZY_TOPSIS = "Fuzzy TOPSIS"
 
 class PreferenceScale(StrEnum):
-    FIVE_POINT_SCALE = "5 Point Scale"
-    SEVEN_POINT_SCALE = "7 Point Scale"
+    FIVE_POINT = "five_point"
+    SEVEN_POINT = "seven_point"
 
 class ParticipationMethod(StrEnum):
     SINGLE_PARTICIPANT = "Single Participant"
@@ -49,7 +49,7 @@ class SubmissionStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 class PreferenceElicitationMethod(StrEnum):
-    DIRECT_RATING = "criterion_linguistic_rating"
+    DIRECT_RATING = "direct_rating"
     PAIRWISE_COMPARISON = "pairwise_comparison"
 
 # TODO: To be used later for audit logging to identify the type of actor performing an action and the type of entity being acted upon.
