@@ -13,11 +13,10 @@ from typing import Literal, Any
 
 from poli_insight.domain.enums import SessionStatus, SessionVisibility
 from poli_insight.domain.scenario import ScenarioSnapshot
-from poli_insight.domain.sessions import SessionScenario
+from poli_insight.domain.sessions import Session
 
-from poli_insight.application.services.session_service import SessionService, SessionScenario
+from poli_insight.application.services.session_service import SessionService, Session
 from poli_insight.application.services.scenario_service import ScenarioSnapshot
-from poli_insight.application.session_queries import SessionFilters
 from poli_insight.application.session_queries import SessionFilters
 from poli_insight.application.dto import UpdateSessionCommand
 
@@ -42,7 +41,7 @@ class RowAction:
 ActionHandler = Callable[
     [
         ActionName,
-        SessionScenario,
+        Session,
         ScenarioSnapshot | None,
     ],
     None,
@@ -169,6 +168,18 @@ def render(
                 "No sessions match the selected filters."
             )
 
+        # details_heading, stats_heading, actions_heading = (
+        #     st.columns(
+        #         [4, 5, 4],
+        #         gap="small",
+        #         vertical_alignment="center",
+        #     )
+        # )
+
+        # details_heading.markdown("Session")
+        # stats_heading.markdown("")
+        # actions_heading.markdown("Actions")
+
         for item in result.items:
             _render_session_row(
                 session=item.session,
@@ -184,7 +195,7 @@ def render(
 def _handle_session_action(
     session_service: SessionService,
     action: ActionName,
-    session: SessionScenario,
+    session: Session,
     snapshot: ScenarioSnapshot | None,
     *,
     actor_id: str,
@@ -267,7 +278,7 @@ def _handle_session_action(
     )
 
 def _render_session_row(
-    session: SessionScenario,
+    session: Session,
     snapshot: ScenarioSnapshot | None,
     *,
     on_action: ActionHandler | None = None,
@@ -276,11 +287,11 @@ def _render_session_row(
 
     st.html(f"""
             <style>
-            .st-key-{session.session_id} {{
+            .st-key-{container_key} {{
                 background: #fff;
                 
             }}
-            .st-key-{session.session_id}:hover {{
+            .st-key-{container_key}:hover {{
                 background: #f0f0f0;
                 transition: background 0.3s ease;
                 cursor: pointer;
@@ -317,7 +328,7 @@ def _render_session_row(
             )
 
 def _render_session_details(
-    session: SessionScenario,
+    session: Session,
     snapshot: ScenarioSnapshot | None,
 ) -> None:
     if snapshot is None:
@@ -350,7 +361,7 @@ def _render_session_details(
     )
 
 def _render_session_stats(
-    session: SessionScenario,
+    session: Session,
 ) -> None:
     deadline_date = (
         session.end_at.strftime(
@@ -429,7 +440,7 @@ def _render_status_badge(
     )
 
 def _render_session_actions(
-    session: SessionScenario,
+    session: Session,
     snapshot: ScenarioSnapshot | None,
     *,
     on_action: ActionHandler | None,
@@ -500,7 +511,7 @@ def _render_session_actions(
 @st.dialog(":primary[Edit Session]", width="large", icon=":material/edit:", on_dismiss="rerun")
 def _render_edit_session_modal(
     session_service: SessionService,
-    session: SessionScenario,
+    session: Session,
     snapshot: ScenarioSnapshot | None,
     *,
     actor_id: str,

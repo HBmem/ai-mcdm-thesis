@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import streamlit as st
-from streamlit_extras.skeleton import *
+
+from streamlit_extras.skeleton import skeleton
 
 from poli_insight.application.session_queries import SessionFilters
 from poli_insight.application.dto import CreateSessionCommand
@@ -14,8 +15,11 @@ from poli_insight.bootstrap import ApplicationContainer
 from poli_insight.presentation.streamlit.auth import get_current_user
 from poli_insight.presentation.streamlit.forms.create_session import render as render_create_session
 from poli_insight.presentation.streamlit.forms.session_filter import render as render_session_filter
+from poli_insight.presentation.streamlit.forms.session_search import render as render_session_search
 from poli_insight.presentation.streamlit.components.scenario_details import render as render_scenario_details
 from poli_insight.presentation.streamlit.components.view_edit_table import render as render_view_edit_table
+from poli_insight.presentation.streamlit.components.manage_participants_table import render as manage_participants_table
+from poli_insight.presentation.streamlit.components.manage_submissions_table import render as manage_submissions_table
 
 from poli_insight.domain.scenario import ScenarioBundle
 from poli_insight.domain.enums import (
@@ -38,6 +42,10 @@ def _render_tabs(container: ApplicationContainer) -> None:
         _render_create_session_tab(container)
     with tab2:
         _render_view_edit_sessions_tab(container)
+    with tab3:
+        _render_manage_participants_tab(container)
+    with tab4:
+        _render_manage_submissions_tab(container)
 
 def _render_create_session_tab(container: ApplicationContainer):
     form, details = st.columns([0.6,0.4])
@@ -145,6 +153,57 @@ def _render_view_edit_sessions_tab(
         # actor_id=current_user.user_id
     )
 
+def _render_manage_participants_tab(
+    container: ApplicationContainer,
+) -> None:
+    session_page = container.session_service.list_sessions(
+        SessionFilters(),
+        page=1,
+        page_size=100,
+    )
+
+    selected_session = render_session_search(
+        session_state_key="manage_participants",
+        sessions=session_page.items,
+    )
+
+    if selected_session is None:
+        st.info(
+            "Select a session to manage its participants."
+        )
+        return
+
+    manage_participants_table(
+        participant_service=container.participant_service,
+        session=selected_session,
+        actor_id="dev-admin",
+    )
+
+def _render_manage_submissions_tab(
+    container: ApplicationContainer,
+) -> None:
+    session_page = container.session_service.list_sessions(
+        SessionFilters(),
+        page=1,
+        page_size=100,
+    )
+
+    selected_session = render_session_search(
+        session_state_key="manage_submissions",
+        sessions=session_page.items,
+    )
+
+    if selected_session is None:
+        st.info(
+            "Select a session to manage its submissions."
+        )
+        return
+
+    manage_submissions_table(
+        submission_service=container.submission_service,
+        session=selected_session,
+        actor_id="dev-admin",
+    )
 
 def _handle_scenario_change(scenario_options: dict[str, ScenarioBundle]) -> None:
     selected_label = st.session_state["scenario_selectbox"]

@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
-from datetime import UTC, datetime
+
 
 from poli_insight.application.session_queries import (
     SessionFilters,
     SessionPage,
 )
 from poli_insight.domain.sessions import (
-    SessionScenario,
+    Session,
     SessionStakeholderGroup,
 )
 from poli_insight.infrastructure.database.orm_models import (
-    SessionScenarioRow,
+    SessionRow,
     SessionStakeholderGroupRow,
 )
 from poli_insight.domain.enums import (
@@ -33,11 +34,11 @@ class SqlAlchemySessionRepository:
 
     def add(
         self,
-        session: SessionScenario,
+        session: Session,
         stakeholder_groups: Sequence[SessionStakeholderGroup],
     ) -> None:
         self._database_session.add(
-            SessionScenarioRow(
+            SessionRow(
                 session_id=session.session_id,
                 scenario_id=session.scenario_id,
                 scenario_version=session.scenario_version,
@@ -87,16 +88,16 @@ class SqlAlchemySessionRepository:
     def get(
         self,
         session_id: str,
-    ) -> SessionScenario | None:
+    ) -> Session | None:
         statement = (
-            select(SessionScenarioRow)
+            select(SessionRow)
             .options(
                 selectinload(
-                    SessionScenarioRow.stakeholder_groups
+                    SessionRow.stakeholder_groups
                 )
             )
             .where(
-                SessionScenarioRow.session_id == session_id
+                SessionRow.session_id == session_id
             )
         )
 
@@ -120,17 +121,16 @@ class SqlAlchemySessionRepository:
     
     def save(
         self,
-        session: SessionScenario,
+        session: Session,
     ) -> None:
         row = self._database_session.get(
-            SessionScenarioRow,
+            SessionRow,
             session.session_id,
         )
 
         if row is None:
             raise LookupError(
-                f"Session {session.session_id!r} "
-                "does not exist."
+                f"Session {session.session_id!r} does not exist."
             )
         
         row.title = session.title
@@ -162,7 +162,7 @@ class SqlAlchemySessionRepository:
         session_id: str,
     ) -> bool:
         row = self._database_session.get(
-            SessionScenarioRow,
+            SessionRow,
             session_id,
         )
 
@@ -183,61 +183,61 @@ class SqlAlchemySessionRepository:
 
         if filters.scenario_id is not None:
             conditions.append(
-                SessionScenarioRow.scenario_id
+                SessionRow.scenario_id
                 == filters.scenario_id
             )
 
         if filters.scenario_version is not None:
             conditions.append(
-                SessionScenarioRow.scenario_version
+                SessionRow.scenario_version
                 == filters.scenario_version
             )
 
         if filters.status is not None:
             conditions.append(
-                SessionScenarioRow.status
+                SessionRow.status
                 == filters.status.value
             )
 
         if filters.visibility is not None:
             conditions.append(
-                SessionScenarioRow.visibility
+                SessionRow.visibility
                 == filters.visibility.value
             )
 
         if filters.weighting_method is not None:
             conditions.append(
-                SessionScenarioRow.weighting_method
+                SessionRow.weighting_method
                 == filters.weighting_method.value
             )
 
         if filters.ranking_method is not None:
             conditions.append(
-                SessionScenarioRow.ranking_method
+                SessionRow.ranking_method
                 == filters.ranking_method.value
             )
 
         if filters.preference_scale is not None:
             conditions.append(
-                SessionScenarioRow.preference_scale
+                SessionRow.preference_scale
                 == filters.preference_scale.value
             )
 
         if filters.require_access_code is not None:
             conditions.append(
-                SessionScenarioRow.require_access_code
+                SessionRow.require_access_code
                 == filters.require_access_code
             )
 
         if filters.allow_resubmissions is not None:
             conditions.append(
-                SessionScenarioRow.allow_resubmissions
+                SessionRow.allow_resubmissions
                 == filters.allow_resubmissions
             )
 
         count_statement = (
             select(func.count())
-            .select_from(SessionScenarioRow)
+            .select_from(SessionRow)
             .where(*conditions)
         )
 
@@ -247,16 +247,16 @@ class SqlAlchemySessionRepository:
         )
 
         statement = (
-            select(SessionScenarioRow)
+            select(SessionRow)
             .options(
                 selectinload(
-                    SessionScenarioRow.stakeholder_groups
+                    SessionRow.stakeholder_groups
                 )
             )
             .where(*conditions)
             .order_by(
-                SessionScenarioRow.updated_at.desc(),
-                SessionScenarioRow.session_id.asc(),
+                SessionRow.updated_at.desc(),
+                SessionRow.session_id.asc(),
             )
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -303,10 +303,10 @@ class SqlAlchemySessionRepository:
     
     @staticmethod
     def _session_to_domain(
-        row: SessionScenarioRow,
+        row: SessionRow,
         stakeholder_groups: list[SessionStakeholderGroup],
-    ) -> SessionScenario:
-        return SessionScenario(
+    ) -> Session:
+        return Session(
             session_id=row.session_id,
             scenario_id=row.scenario_id,
             scenario_version=row.scenario_version,

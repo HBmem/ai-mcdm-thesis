@@ -77,6 +77,8 @@ def render(
     with st.container(border=True, key=session_state_key):
         filters = {}
     
+        st.markdown("##### Filter Session")
+
         col1, col2, col3 = st.columns(3, vertical_alignment="center")
 
         with col1:

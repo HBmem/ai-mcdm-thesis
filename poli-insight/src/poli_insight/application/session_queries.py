@@ -10,7 +10,7 @@ from poli_insight.domain.enums import (
     SessionVisibility,
     WeightingMethod,
 )
-from poli_insight.domain.sessions import SessionScenario
+from poli_insight.domain.sessions import Session
 from poli_insight.domain.scenario import ScenarioSnapshot
 
 
@@ -18,6 +18,7 @@ from poli_insight.domain.scenario import ScenarioSnapshot
 class SessionFilters:
     scenario_id: str | None = None
     scenario_version: str | None = None
+    title: str | None = None
     status: SessionStatus | None = None
     visibility: SessionVisibility | None = None
     weighting_method: WeightingMethod | None = None
@@ -29,7 +30,7 @@ class SessionFilters:
 
 @dataclass(frozen=True, slots=True)
 class SessionPage:
-    items: tuple[SessionScenario, ...]
+    items: tuple[Session, ...]
     total: int
     page: int
     page_size: int
@@ -43,7 +44,7 @@ class SessionPage:
 
 @dataclass(frozen=True, slots=True)
 class SessionTableItem:
-    session: SessionScenario
+    session: Session
     snapshot: ScenarioSnapshot | None
 
 

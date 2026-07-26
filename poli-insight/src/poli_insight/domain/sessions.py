@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Self
 
+from poli_insight.domain.participant import Participant
 from poli_insight.domain.enums import (
     AggregationMethod,
     ParticipationMethod,
@@ -71,7 +72,7 @@ class SessionStakeholderGroup:
         # if not self.created_at: 
         
 @dataclass
-class SessionScenario:
+class Session:
     session_id: str
 
     # The session reference an immutable scenario snapshot
@@ -110,6 +111,10 @@ class SessionScenario:
     stakeholder_groups: list[SessionStakeholderGroup] = field(
         default_factory=list
     )
+
+    # participants: list[Participant] = field(
+    #     default_factory=list
+    # )
 
     def __post_init__(self) -> None:
         self._validate_identity()
@@ -435,14 +440,12 @@ class SessionScenario:
     def _validate_access_configuration(self) -> None:
         if self.require_access_code and not self.access_code_type:
             raise SessionRuleViolation(
-                "Access-code type is required when access "
-                "codes are enabled."
+                "Access-code type is required when access codes are enabled."
             )
 
         if not self.require_access_code and self.access_code_type:
             raise SessionRuleViolation(
-                "Access-code type should be empty when access "
-                "codes are disabled."
+                "Access-code type should be empty when access codes are disabled."
             )
     
     def _validate_stakeholder_groups(self) -> None:

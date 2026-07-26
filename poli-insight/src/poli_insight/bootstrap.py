@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-from poli_insight.application.services.session_service import (
-    SessionService,
-)
+from poli_insight.application.services.session_service import SessionService
+from poli_insight.application.services.participant_service import ParticipantService
+from poli_insight.application.services.submissions_service import SubmissionService
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.engine import (
     build_session_factory,
@@ -20,6 +20,8 @@ class ApplicationContainer:
 
     settings: Settings
     session_service: SessionService
+    participant_service: ParticipantService
+    submission_service: SubmissionService
 
     # TODO: Add future services here:
     # scenario_service: ScenarioService
@@ -56,7 +58,17 @@ def create_container(
         unit_of_work_factory=unit_of_work_factory
     )
 
+    participant_service = ParticipantService(
+        unit_of_work_factory=unit_of_work_factory
+    )
+
+    submission_service = SubmissionService(
+        unit_of_work_factory=unit_of_work_factory
+    )
+
     return ApplicationContainer(
         settings=resolved_settings,
         session_service=session_service,
+        participant_service=participant_service,
+        submission_service=submission_service,
     )

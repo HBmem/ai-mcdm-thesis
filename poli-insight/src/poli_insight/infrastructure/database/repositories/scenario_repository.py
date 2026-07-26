@@ -61,22 +61,6 @@ class SqlAlchemyScenarioRepository:
         )
 
         return candidate
-    
-    @staticmethod
-    def _to_domain(
-        row: ScenarioSnapshotRow,
-    ) -> ScenarioSnapshot:
-        return ScenarioSnapshot(
-            scenario_id=row.scenario_id,
-            scenario_version=row.scenario_version,
-            scenario_type=ScenarioType(row.scenario_type),
-            title=row.title,
-            domain=row.domain,
-            status=row.status,
-            config_hash=row.config_hash,
-            config_snapshot_json=row.config_snapshot_json,
-            created_at=_as_utc(row.created_at),
-        )
 
     def get_snapshot(
         self,
@@ -119,6 +103,22 @@ class SqlAlchemyScenarioRepository:
                 self._to_domain(row)
             for row in rows
         }
+
+    @staticmethod
+    def _to_domain(
+        row: ScenarioSnapshotRow,
+    ) -> ScenarioSnapshot:
+        return ScenarioSnapshot(
+            scenario_id=row.scenario_id,
+            scenario_version=row.scenario_version,
+            scenario_type=ScenarioType(row.scenario_type),
+            title=row.title,
+            domain=row.domain,
+            status=row.status,
+            config_hash=row.config_hash,
+            config_snapshot_json=row.config_snapshot_json,
+            created_at=_as_utc(row.created_at),
+        )
 
 def _as_utc(
     value: datetime | None,

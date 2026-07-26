@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from poli_insight.domain.sessions import (
-    SessionScenario,
+    Session,
     SessionStakeholderGroup,
 )
 
@@ -20,9 +20,12 @@ from poli_insight.application.session_queries import (
     SessionTableItem,
     SessionTablePage,
 )
-from poli_insight.application.services.scenario_service import ScenarioSnapshotNotFoundError, SessionScenarioDetails
+from poli_insight.application.services.scenario_service import ScenarioSnapshotNotFoundError, SessionDetails
 
 class CreateSessionError(ValueError):
+    pass
+
+class SessionNotFoundError(LookupError):
     pass
 
 class SessionScenarioNotFoundError(LookupError):
@@ -34,7 +37,10 @@ class SessionService:
     def __init__(self, unit_of_work_factory: UnitOfWorkFactory) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
-    def create_session(self, command: CreateSessionCommand) -> str:
+    def create_session(
+        self,
+        command: CreateSessionCommand,
+    ) -> str:
         title = command.title.strip()
 
         if not title:
@@ -80,7 +86,7 @@ class SessionService:
         now = datetime.now(UTC)
         session_id = _new_id("session")
 
-        session = SessionScenario(
+        session = Session(
             session_id=session_id,
             scenario_id=command.scenario.scenario_id,
             scenario_version=command.scenario.scenario_version,
@@ -138,12 +144,12 @@ class SessionService:
     def get_session(
         self,
         session_id: str,
-    ) -> SessionScenario:
+    ) -> Session:
         with self._unit_of_work_factory() as unit_of_work:
             session = unit_of_work.sessions.get(session_id)
 
         if session is None:
-            raise SessionScenarioNotFoundError(
+            raise SessionNotFoundError(
                 f"Session {session_id!r} was not found."
             )
 
@@ -152,7 +158,7 @@ class SessionService:
     def get_session_details(
         self,
         session_id: str,
-    ) -> SessionScenarioDetails:
+    ) -> SessionDetails:
         with self._unit_of_work_factory() as unit_of_work:
             session = unit_of_work.sessions.get(session_id)
 
@@ -172,7 +178,7 @@ class SessionService:
                     f"was not found."
                 )
 
-            return SessionScenarioDetails(
+            return SessionDetails(
                 snapshot=snapshot,
                 session=session,
             )
@@ -181,7 +187,7 @@ class SessionService:
     def _get_required_session(
         unit_of_work: UnitOfWork,
         session_id: str,
-    ) -> SessionScenario:
+    ) -> Session:
         session = unit_of_work.sessions.get(session_id)
 
         if session is None:

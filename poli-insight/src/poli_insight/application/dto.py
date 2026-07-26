@@ -11,6 +11,7 @@ from poli_insight.domain.enums import (
     RankingMethod,
     SessionVisibility,
     WeightingMethod,
+    ParticipantStatus
 )
 from poli_insight.domain.scenario import ScenarioBundle
 
@@ -47,3 +48,21 @@ class UpdateSessionCommand:
     visibility: SessionVisibility
     end_at: datetime | None
     actor_id: str
+
+@dataclass(frozen=True)
+class CreateParticipantCommand:
+    participant_id: str
+    session_id: str
+    user_id: str | None
+    stakeholder_group_id: str
+
+    name: str | None
+    alias: str | None
+    access_status: ParticipantStatus
+    disabled_at: datetime | None
+    disabled_by: str | None
+
+    created_at: datetime
+    created_by: str
+    updated_at: datetime
+    updated_by: str

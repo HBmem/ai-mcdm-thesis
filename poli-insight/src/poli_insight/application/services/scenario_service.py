@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from poli_insight.application.ports.unit_of_work import UnitOfWork
 from poli_insight.domain.scenario import ScenarioSnapshot
-from poli_insight.domain.sessions import SessionScenario
+from poli_insight.domain.sessions import Session
 
 class ScenarioSnapshotNotFoundError(LookupError):
     pass
@@ -39,6 +39,6 @@ class ScenarioSnapshotService:
     
     
 @dataclass(frozen=True, slots=True)
-class SessionScenarioDetails:
+class SessionDetails:
     snapshot: ScenarioSnapshot
-    session: SessionScenario
+    session: Session

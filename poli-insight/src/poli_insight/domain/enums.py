@@ -13,13 +13,6 @@ class SessionVisibility(StrEnum):
     PRIVATE = "Private"
     UNLISTED = "Unlisted"
 
-class ParticipantStatus(StrEnum):
-    INVITED = "Invited"
-    STARTED = "Started"
-    SUBMITTED = "Submitted"
-    DISABLED = "Disabled"
-    EXPIRED = "Expired"
-
 class WeightingMethod(StrEnum):
     AHP = "AHP"
     FUZZY_AHP = "Fuzzy AHP"
@@ -43,6 +36,21 @@ class AggregationMethod(StrEnum):
 class ScenarioType(StrEnum):
     STANDARD = "standard"
     HIERARCHICAL = "hierarchical"
+
+class ParticipantStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    WITHDRAWN = "withdrawn"
+
+class SubmissionStatus(StrEnum):
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    SUPERSEDED = "superseded"
+    WITHDRAWN = "withdrawn"
+
+class PreferenceElicitationMethod(StrEnum):
+    DIRECT_RATING = "criterion_linguistic_rating"
+    PAIRWISE_COMPARISON = "pairwise_comparison"
 
 # TODO: To be used later for audit logging to identify the type of actor performing an action and the type of entity being acted upon.
 class ActorType(StrEnum):
