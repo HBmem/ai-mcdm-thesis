@@ -23,6 +23,7 @@ def render(
 ) -> CreateSessionCommand | None:
     errors = []
 
+    # TODO: Redo, the session creation feature to include session new preference_elicitation_method and pulling scenario defaults.
     with st.container():
         st.markdown("###### Session Details")
         session_title = st.text_input(

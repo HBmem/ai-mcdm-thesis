@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from poli_insight.application.dto import SavePreferenceAnswersCommand, SubmissionDraftDTO 
 from poli_insight.application.utils import _new_id
 from poli_insight.application.ports.unit_of_work import UnitOfWork
 from poli_insight.application.submission_queries import (
@@ -13,10 +14,23 @@ from poli_insight.application.submission_queries import (
 
 from poli_insight.domain.enums import ParticipantStatus
 from poli_insight.domain.submissions import Submission
+from poli_insight.domain.mcdm.preference_scale import SCALE_CATALOG, get_scale
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 
 class SubmissionNotFoundError(ValueError):
+    """"""
+    pass
+
+class ParticipantNotFoundError(ValueError):
+    """"""
+    pass
+
+class SessionNotFoundError(ValueError):
+    """"""
+    pass
+
+class ScenarioNotFoundError(ValueError):
     """"""
     pass
 
@@ -221,4 +235,71 @@ class SubmissionService:
             )
 
             return dashboard_page
-        
+
+    def save_preference(
+        self,
+        command: SavePreferenceAnswersCommand,
+    ) -> SubmissionDraftDTO:
+        with self._unit_of_work_factory()  as unit_of_work:
+            submission = unit_of_work.submissions.get(
+                command.submission_id
+            )
+
+            if submission is None:
+                raise SubmissionNotFoundError(
+                    f"Submission {command.submission_id} was not found."
+                )
+
+            participant = unit_of_work.participants.get(
+                submission.participant_id
+            )
+
+            if participant is None:
+                raise ParticipantNotFoundError(
+                    f"Participant {submission.participant_id} was not found."
+                )
+
+            session = unit_of_work.sessions.get(
+                participant.session_id
+            )
+
+            if session is None:
+                raise SessionNotFoundError(
+                    f"Session {participant.session_id} was not found."
+                )
+
+            scenario = unit_of_work.sessions.get(
+                session.scenario_id
+            )
+
+            if scenario is None:
+                raise ScenarioNotFoundError(
+                    f"Scenario {session.scenario_id_id} was not found."
+                )
+
+            scale = get_scale(
+                SCALE_CATALOG,
+                session.preference_elicitation_method,
+                session.preference_scale
+            )
+
+            # Validate and merge the answers
+        #     updated_answers = merge_preference_answers(
+        #     existing_answers=submission.answers,
+        #     incoming_answers=command.answers,
+        #     elicitation_method=(
+        #         session.preference_elicitation_method
+        #     ),
+        #     criteria=scenario.configuration()["criteria"],
+        #     scale=scale,
+        # )
+
+        # submission.save_answers(
+        #     answers=updated_answers,
+        #     actor_id=command.actor_id,
+        # )
+
+        # unit_of_work.submissions.save(submission)
+        # unit_of_work.commit()
+
+        # return build_submission_draft_dto(...)

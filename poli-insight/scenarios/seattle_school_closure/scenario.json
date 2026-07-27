@@ -116,21 +116,20 @@
 		}
 	],
 	"preference_collection": {
-		"default_method": "criterion_linguistic_rating",
-		"supported_methods": ["criterion_linguistic_rating", "pairwise_comparison"],
-		"default_scale_id": "five_level_importance"
+		"default_method": "pairwise_comparison",
+		"supported_methods": ["pairwise_comparison"],
+		"default_scale_id": "pairwise_seven_point_v1",
+		"available_scale_ids": [
+			"pairwise_five_point_v1",
+			"pairwise_seven_point_v1"
+		]
 	},
 	"scales": {
-		"five_level_importance": {
-			"type": "linguistic",
+		"pairwise_seven_point_v1": {
+			"version": "1.0",
+			"elicitation_method": "pairwise_comparison",
 			"ordered": true,
-			"values": [
-				{"label": "Very Low", "numeric_value": 1, "fuzzy_value": [0.0, 0.1, 0.25]},
-				{"label": "Low", "numeric_value": 2, "fuzzy_value": [0.15, 0.3, 0.45]},
-				{"label": "Medium", "numeric_value": 3, "fuzzy_value": [0.35, 0.5, 0.65]},
-				{"label": "High", "numeric_value": 4, "fuzzy_value": [0.55, 0.7, 0.85]},
-				{"label": "Very High", "numeric_value": 5, "fuzzy_value": [0.75, 0.9, 1.0]}
-			]
+			"values": []
 		}
 	},
 	"mcdm_methods": {

@@ -23,7 +23,7 @@ def load_scenario_folder(folder: Path) -> ScenarioBundle:
 
 
     # Load data sources
-    data_sources_ref = manifest.get("data_source_file", "data_sources.json")
+    data_sources_ref = manifest.get("data_sources_file", "data_sources.json")
     data_sources_path = _safe_resolve(folder, data_sources_ref)
     data_sources = _read_json(data_sources_path) if data_sources_path and data_sources_path.exists() else manifest.get("data_sources", {})
 
@@ -37,7 +37,7 @@ def load_scenario_folder(folder: Path) -> ScenarioBundle:
         preprocessing = _read_json(preprocessing_path)
     
     # Sessions rules
-    session_rules_ref = manifest.get("sessions_rules_file", "sessions_rules.json")
+    session_rules_ref = manifest.get("session_rules_file", "sessions_rules.json")
     session_rules_path = _safe_resolve(folder, session_rules_ref)
     session_rules = _read_json(session_rules_path) if session_rules_path and session_rules_path.exists() else manifest.get("sessions_rules", {})
 

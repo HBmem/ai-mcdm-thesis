@@ -7,8 +7,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Self
 
-from poli_insight.domain.enums import ScenarioType
-
+from poli_insight.domain.enums import ScenarioType, WeightingMethod, PreferenceElicitationMethod
+from poli_insight.domain.mcdm.preference_scale import (
+    PreferenceScale,
+    PreferenceScaleDefinition,
+    ScaleCatalog,
+)
 class ScenarioRuleViolation(ValueError):
     """Raised when a scenario violates a domain rule."""
     pass
@@ -76,6 +80,26 @@ class ScenarioBundle:
     def mcdm_methods(self) -> dict[str, Any]:
         return self.scenario.get("mcdm_methods", {})
 
+    @property
+    def preference_collection(self) -> dict[str, Any]:
+        return self.scenario.get("preference_collection", {})
+
+    def get_preference_scale(
+        self,
+        preference_elicitation_method: PreferenceElicitationMethod,
+        preference_scale: PreferenceScale,
+        weighting_method: WeightingMethod,
+    ) -> PreferenceScaleDefinition:
+        # TODO: pull data from scenario default and work accordingly.
+        values = ScaleCatalog(preference_elicitation_method, preference_elicitation_method)
+        return PreferenceScaleDefinition(
+            preference_elicitation_method,
+            preference_scale=preference_scale,
+            version="",
+            ordered=True,
+            values=values,
+        )
+    
     def __post_init__(self) -> None:
         if not self.scenario_id.strip():
             raise ScenarioRuleViolation(
@@ -96,11 +120,6 @@ class ScenarioBundle:
             raise ScenarioRuleViolation(
                 "Scenario domain cannot be empty."
             )
-
-        # if (self.stakeholder_groups) < 1:
-        #     raise ScenarioRuleViolation(
-        #         "Scenario must have at least one Stakeholder."
-        #     )
         
     def snapshot_document(self) -> dict[str, Any]:
         """Return only the configuration covered by the hash."""

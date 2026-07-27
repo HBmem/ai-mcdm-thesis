@@ -13,6 +13,7 @@ __pycache__/
 # Runtime databases
 *.sqlite
 *.sqlite3
+*.sqlite.backup
 *.db
 
 # Coverage and build output

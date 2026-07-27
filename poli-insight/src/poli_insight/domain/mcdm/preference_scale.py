@@ -356,7 +356,12 @@ PAIRWISE_FIVE_POINT = PreferenceScaleDefinition(
     version="1.0",
     ordered=True,
     values=(
-        _option("pairwise_1", "Left criterion is more important", 5, (4, 5, 6)),
+        _option(
+            "pairwise_1",
+            "Left criterion is more important",
+            5,
+            (4, 5, 6),
+        ),
         _option(
             "pairwise_2",
             "Left criterion is slightly more important",

@@ -73,13 +73,15 @@ def render(
         )
     )
 
-    st.html(f"""
+    st.html(
+        f"""
         <style>
         .st-key-{session_state_key} {{
             background: #fff;
         }}
         </style>
-        """)
+        """
+    )
 
     with st.container(border=True, key=session_state_key):
         st.markdown("##### Session Search")
