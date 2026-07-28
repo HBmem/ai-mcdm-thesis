@@ -116,10 +116,6 @@ class SessionRow(Base):
         String(50),
         nullable=False,
     )
-    preference_scale: Mapped[str] = mapped_column(
-        String(50),
-        nullable=False,
-    )
     weighting_method: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
@@ -132,12 +128,14 @@ class SessionRow(Base):
         String(50),
         nullable=False,
     )
-
+    preference_scale: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
     preference_elicitation_method: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
     )
-
     require_access_code: Mapped[bool] = mapped_column(
         nullable=False,
     )
@@ -676,6 +674,15 @@ class SubmissionValidationRow(Base):
     weighting_method: Mapped[str] = mapped_column(
         String(50),
         nullable=False
+    )
+
+    preference_scale: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+    preference_elicitation_method: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
     )
         
     validator_version: Mapped[str] = mapped_column(

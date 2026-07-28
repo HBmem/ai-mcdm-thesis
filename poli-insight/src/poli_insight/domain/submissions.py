@@ -7,6 +7,8 @@ from typing import Any, Mapping, Self
 from poli_insight.domain.enums import (
     SubmissionStatus,
     WeightingMethod,
+    PreferenceScale,
+    PreferenceElicitationMethod,
 )
 
 
@@ -258,20 +260,3 @@ class Submission:
 
         self.updated_at = timestamp
         self.updated_by = actor_id
-
-@dataclass
-class SubmissionValidation:
-    validation_id: str
-    submission_id: str
-    answers_hash: str
-    weighting_method: WeightingMethod
-    validator_version: str
-
-    completion_ratio: float
-    weights: dict[str, float]
-    consistency_ratio: float | None
-    is_valid: bool
-    errors: tuple[str, ...]
-
-    validated_at: datetime
-    validated_by: str

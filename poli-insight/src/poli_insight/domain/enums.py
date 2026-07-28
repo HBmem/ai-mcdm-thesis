@@ -52,6 +52,14 @@ class PreferenceElicitationMethod(StrEnum):
     DIRECT_RATING = "direct_rating"
     PAIRWISE_COMPARISON = "pairwise_comparison"
 
+class AnalysisResultType(StrEnum):
+    CRITERION_WEIGHTS = "criterion_weights"
+    AGGREGATE_PAIRWISE_MATRIX = "aggregate_pairwise_matrix"
+    ALTERNATIVE_RANKING = "alternative_rankings"
+    CONSISTENCY_DIAGNOSTIC = "consistency_diagnostics"
+    STAKEHOLDER_GROUP_WEIGHTS = "stakeholder_group_weights"
+    SENSITIVITY_ANALYSIS = "sensitivity_analysis"
+
 # TODO: To be used later for audit logging to identify the type of actor performing an action and the type of entity being acted upon.
 class ActorType(StrEnum):
     ADMIN = "Admin"
