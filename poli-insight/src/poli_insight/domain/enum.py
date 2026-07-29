@@ -1,3 +1,10 @@
+"""
+This module provides the enums for the project.
+
+Enums values are persistent database/API values.
+"""
+
+
 from enum import StrEnum
 
 class ScenarioSnapshotStatus(StrEnum):
@@ -33,7 +40,7 @@ class SessionStatus(StrEnum):
     OPEN = "open"
     PAUSED = "paused"
     CLOSED = "closed"
-    CANCELLED = "canceled"
+    CANCELED = "canceled"
     ARCHIVED = "archived"
 
 class Discoverability(StrEnum):
@@ -82,12 +89,12 @@ class AlgorithmProvider(StrEnum):
     PYDECISION = "pydecision"
     INTERNAL = "internal" # will not be used for the thesis
 
-class ParticipantAccessCode(StrEnum):
+class ParticipantAccessStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
     WITHDRAWN = "withdrawn"
 
-class ParticipantPRogressStatus(StrEnum):
+class ParticipantProgressStatus(StrEnum):
     INVITED = "invited"
     ENROLLED = "enrolled"
     STARTED = "started"
@@ -126,7 +133,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
-    CANCELLED = "cancelled"
+    CANCELED = "canceled"
 
 class RunInclusionStatus(StrEnum):
     INCLUDED = "included"
@@ -141,7 +148,7 @@ class RunInclusionStatus(StrEnum):
 class MissingGroupPolicy(StrEnum):
     FAIL = "fail"
     EXCLUDED_RENORMALIZED = "exclude_and_renormalize"
-    ZERO_CONTRIBUTION = "zero_contributioN"
+    ZERO_CONTRIBUTION = "zero_contribution"
 
 class AnalysisType(StrEnum):
     SENSITIVITY = "sensitivity"
@@ -165,12 +172,6 @@ class ArtifactType(StrEnum):
     OTHER = "other"
 
 class ReportAudience(StrEnum):
-    STAKEHOLDER_GROUP = "stakeholder_group"
-    MODERATOR = "moderator"
-    PARTICIPANT = "participant"
-    PUBLIC = "public"
-
-class ReportApprovalStatus(StrEnum):
     STAKEHOLDER_GROUP = "stakeholder_group"
     MODERATOR = "moderator"
     PARTICIPANT = "participant"
