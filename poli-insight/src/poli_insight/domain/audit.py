@@ -48,7 +48,7 @@ class AuditEvent:
 
     def __post_init__(self) -> None:
         self._validate_identity()
-        self._validate_occurred_at()
+        self._validate_schedule()
         self._validate_schema_version()
 
     def _validate_identity(self) -> None:
@@ -78,7 +78,7 @@ class AuditEvent:
             )
 
     def _validate_schedule(self) -> None:
-        if is_aware_datetime(self.occurred_at):
+        if not is_aware_datetime(self.occurred_at):
             raise AuditRuleViolation(
                 "Occurred_at must include timezone information."
             )
@@ -86,5 +86,5 @@ class AuditEvent:
     def _validate_schema_version(self) -> None:
         if self.schema_version < 1:
             raise AuditRuleViolation(
-                "Schema Version cannot be less than 0."
+                "Schema Version must be at least 1."
             )

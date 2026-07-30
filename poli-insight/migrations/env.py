@@ -7,7 +7,14 @@ from alembic import context
 
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.base import Base
-from poli_insight.infrastructure.database import orm_models  # noqa: F401
+from poli_insight.infrastructure.database.models import audit  # noqa: F401
+from poli_insight.infrastructure.database.models import scenario  # noqa: F401
+from poli_insight.infrastructure.database.models import session  # noqa: F401
+
+from poli_insight.infrastructure.database.types import (
+    UTCDateTime,
+    UUIDString,
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -35,6 +42,22 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+def render_item(type_, obj, autogen_context):
+    if type_ == "type" and isinstance(obj, UUIDString):
+        autogen_context.imports.add(
+            "from poli_insight.infrastructure.database.types "
+            "import UUIDString"
+        )
+        return "UUIDString()"
+
+    if type_ == "type" and isinstance(obj, UTCDateTime):
+        autogen_context.imports.add(
+            "from poli_insight.infrastructure.database.types "
+            "import UTCDateTime"
+        )
+        return "UTCDateTime()"
+
+    return False
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -54,6 +77,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_item=render_item,
     )
 
     with context.begin_transaction():
@@ -79,6 +103,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             render_as_batch=True,
             compare_type=True,
+            render_item=render_item,
         )
 
         with context.begin_transaction():

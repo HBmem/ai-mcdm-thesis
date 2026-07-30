@@ -7,11 +7,19 @@ Enums values are persistent database/API values.
 
 from enum import StrEnum
 
+class ScenarioDefinitionStatus(StrEnum):
+    ACTIVE = "active"
+    RETIRED = "retired"
+
 class ScenarioSnapshotStatus(StrEnum):
     VALIDATING = "validating"
     READY = "ready"
     INVALID = "invalid"
     RETIRED = "retired"
+
+class ScenarioType(StrEnum):
+    STANDARD = "standard"
+    HIERARCHICAL = "hierarchical"
 
 class ScenarioFileRole(StrEnum):
     SCENARIO_CONFIG = "scenario_config"

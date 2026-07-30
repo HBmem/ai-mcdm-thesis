@@ -7,7 +7,7 @@ from poli_insight.domain.audit import AuditEvent
 class AuditEventRepository(Protocol):
     def add(
         self,
-        event: AuditEvent
+        event: AuditEvent,
     ) -> None:
         ...
 
@@ -19,6 +19,6 @@ class AuditEventRepository(Protocol):
 
     def get_for_session(
         self,
-        session_id: str
+        session_id: str,
     ) -> Sequence[AuditEvent]:
         ...
