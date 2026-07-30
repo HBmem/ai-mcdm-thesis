@@ -409,13 +409,22 @@ def session_operational_state_to_domain(
 ) -> Session:
     """Compose a domain session from operational state and detached versions."""
 
+    ordered_configurations = tuple(
+        sorted(
+            configurations,
+            key=lambda item: (
+                item.version_number,
+                item.configuration_version_id,
+            ),
+        )
+    )
     active_configuration_version_id = _optional_id(
         row.active_configuration_version_id
     )
     if active_configuration_version_id is not None:
         matches = tuple(
             configuration
-            for configuration in configurations
+            for configuration in ordered_configurations
             if configuration.configuration_version_id
             == active_configuration_version_id
         )
@@ -452,7 +461,7 @@ def session_operational_state_to_domain(
         created_by=row.created_by,
         updated_at=_required_utc(row.updated_at, "updated_at"),
         updated_by=row.updated_by,
-        configurations=configurations,
+        configurations=ordered_configurations,
     )
 
 

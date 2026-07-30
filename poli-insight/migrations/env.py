@@ -11,6 +11,7 @@ from poli_insight.infrastructure.database.models import audit  # noqa: F401
 from poli_insight.infrastructure.database.models import participation  # noqa: F401
 from poli_insight.infrastructure.database.models import scenario  # noqa: F401
 from poli_insight.infrastructure.database.models import session  # noqa: F401
+from poli_insight.infrastructure.database.models import submission  # noqa: F401
 
 from poli_insight.infrastructure.database.types import (
     UTCDateTime,

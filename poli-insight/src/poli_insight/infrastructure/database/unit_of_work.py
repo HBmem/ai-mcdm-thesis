@@ -8,7 +8,15 @@ from poli_insight.infrastructure.database.repositories.audit_repository import (
 from poli_insight.infrastructure.database.repositories.scenario_repository import (
     SqlAlchemyScenarioRepository,
 )
-
+from poli_insight.infrastructure.database.repositories.session_repository import (
+    SqlAlchemySessionRepository,
+)
+from poli_insight.infrastructure.database.repositories.participant_repository import (
+    SqlAlchemyParticipantRepository,
+)
+from poli_insight.infrastructure.database.repositories.submission_repository import (
+    SqlAlchemySubmissionRepository,
+)
 
 class SqlAlchemyUnitOfWork:
     def __init__(
@@ -25,6 +33,15 @@ class SqlAlchemyUnitOfWork:
             self.database_session
         )
         self.scenarios = SqlAlchemyScenarioRepository(
+            self.database_session
+        )
+        self.sessions = SqlAlchemySubmissionRepository(
+            self.database_session
+        )
+        self.participants = SqlAlchemyParticipantRepository(
+            self.database_session
+        )
+        self.submissions = SqlAlchemySubmissionRepository(
             self.database_session
         )
 
