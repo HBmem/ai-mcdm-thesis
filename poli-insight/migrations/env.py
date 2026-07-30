@@ -8,6 +8,7 @@ from alembic import context
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.base import Base
 from poli_insight.infrastructure.database.models import audit  # noqa: F401
+from poli_insight.infrastructure.database.models import participation  # noqa: F401
 from poli_insight.infrastructure.database.models import scenario  # noqa: F401
 from poli_insight.infrastructure.database.models import session  # noqa: F401
 
