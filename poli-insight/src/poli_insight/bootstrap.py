@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from poli_insight.application.queries.page_queries import PageQueries
 from poli_insight.application.use_cases.add_session_configuration import (
     AddSessionConfiguration,
 )
@@ -15,6 +16,9 @@ from poli_insight.application.use_cases.save_submission_draft import (
 from poli_insight.application.use_cases.submit_response import SubmitResponse
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.engine import build_session_factory
+from poli_insight.infrastructure.database.queries.page_queries import (
+    SqlAlchemyPageQueries,
+)
 from poli_insight.infrastructure.database.unit_of_work import (
     SqlAlchemyUnitOfWork,
 )
@@ -37,6 +41,7 @@ class SubmissionUseCases:
 @dataclass(frozen=True, slots=True)
 class ApplicationContainer:
     settings: Settings
+    page_queries: PageQueries
     import_scenario: ImportScenario
     sessions: SessionUseCases
     submissions: SubmissionUseCases
@@ -52,6 +57,7 @@ def create_container(
 
     return ApplicationContainer(
         settings=resolved_settings,
+        page_queries=SqlAlchemyPageQueries(session_factory, resolved_settings.app_timezone),
         import_scenario=ImportScenario(unit_of_work_factory),
         sessions=SessionUseCases(
             create=CreateSession(unit_of_work_factory),
@@ -66,6 +72,7 @@ def create_container(
             submit=SubmitResponse(unit_of_work_factory),
         ),
     )
+
 # from __future__ import annotations
 
 # from dataclasses import dataclass

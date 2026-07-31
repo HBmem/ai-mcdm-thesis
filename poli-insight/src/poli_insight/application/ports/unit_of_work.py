@@ -11,6 +11,9 @@ from poli_insight.application.ports.session_repository import SessionRepository
 from poli_insight.application.ports.submission_repository import (
     SubmissionRepository,
 )
+from poli_insight.application.ports.validation_repository import (
+    ValidationRepository,
+)
 
 
 class UnitOfWork(Protocol):
@@ -19,6 +22,7 @@ class UnitOfWork(Protocol):
     session: SessionRepository
     participants: ParticipantRepository
     submissions: SubmissionRepository
+    validations: ValidationRepository
 
     def __enter__(self) -> "UnitOfWork":
         ...

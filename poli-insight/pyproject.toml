@@ -7,7 +7,7 @@ name = "poli-insight"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "streamlit",
+    "streamlit[auth]>=1.58,<2",
     "streamlit_extras",
     "pydecision",
     "pandas",

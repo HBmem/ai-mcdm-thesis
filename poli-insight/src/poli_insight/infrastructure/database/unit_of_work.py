@@ -17,6 +17,10 @@ from poli_insight.infrastructure.database.repositories.participant_repository im
 from poli_insight.infrastructure.database.repositories.submission_repository import (
     SqlAlchemySubmissionRepository,
 )
+from poli_insight.infrastructure.database.repositories.validation_repository import (
+    SqlAlchemyValidationRepository,
+)
+
 
 class SqlAlchemyUnitOfWork:
     def __init__(
@@ -28,20 +32,22 @@ class SqlAlchemyUnitOfWork:
     def __enter__(self) -> "SqlAlchemyUnitOfWork":
         self.database_session = self._session_factory()
 
-        # TODO: Add repository assignments 
         self.audit_events = SqlAlchemyAuditRepository(
             self.database_session
         )
         self.scenarios = SqlAlchemyScenarioRepository(
             self.database_session
         )
-        self.sessions = SqlAlchemySubmissionRepository(
+        self.session = SqlAlchemySessionRepository(
             self.database_session
         )
         self.participants = SqlAlchemyParticipantRepository(
             self.database_session
         )
         self.submissions = SqlAlchemySubmissionRepository(
+            self.database_session
+        )
+        self.validations = SqlAlchemyValidationRepository(
             self.database_session
         )
 
