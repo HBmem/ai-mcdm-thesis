@@ -451,7 +451,7 @@ class SubmissionValidation:
         """Move a pending attempt to running without changing its inputs."""
 
         _require_aware_datetime(at, "Validation start time")
-        if self.status is not ValidationStatus.PENDING:
+        if self.status != ValidationStatus.PENDING:
             raise ValidationRuleViolation(
                 "Only a pending validation can be started."
             )
@@ -641,7 +641,7 @@ class SubmissionValidation:
     def _require_running(self, *, actor_id: str, at: datetime) -> None:
         _require_text(actor_id, "Validation actor ID")
         _require_aware_datetime(at, "Validation completion time")
-        if self.status is not ValidationStatus.RUNNING:
+        if self.status != ValidationStatus.RUNNING:
             raise ValidationRuleViolation(
                 "Only a running validation can be completed."
             )
@@ -738,10 +738,10 @@ class SubmissionValidation:
         _validate_weight_totals(self.criterion_weights)
 
     def _validate_lifecycle_state(self) -> None:
-        if self.status is ValidationStatus.PENDING:
+        if self.status == ValidationStatus.PENDING:
             self._require_no_execution_state()
             return
-        if self.status is ValidationStatus.RUNNING:
+        if self.status == ValidationStatus.RUNNING:
             if self.started_at is None:
                 raise ValidationRuleViolation(
                     "A running validation requires started_at."
@@ -771,7 +771,7 @@ class SubmissionValidation:
             raise ValidationRuleViolation(
                 "A terminal validation requires an output hash."
             )
-        if self.status is ValidationStatus.ERROR:
+        if self.status == ValidationStatus.ERROR:
             if self.failure_code is None or self.failure_detail is None:
                 raise ValidationRuleViolation(
                     "An errored validation requires failure code and detail."
@@ -819,7 +819,7 @@ class SubmissionValidation:
         severities = {message.severity for message in self.messages}
         has_error = MessageSeverity.ERROR in severities
         has_warning = MessageSeverity.WARNING in severities
-        if self.status is ValidationStatus.INVALID:
+        if self.status == ValidationStatus.INVALID:
             if not has_error:
                 raise ValidationRuleViolation(
                     "An invalid validation requires an error message."
@@ -829,13 +829,13 @@ class SubmissionValidation:
             raise ValidationRuleViolation(
                 "A valid validation cannot contain an error message."
             )
-        if self.status is ValidationStatus.VALID_WITH_WARNING:
+        if self.status == ValidationStatus.VALID_WITH_WARNING:
             if not has_warning:
                 raise ValidationRuleViolation(
                     "A valid-with-warnings result requires a warning message."
                 )
             return
-        if self.status is ValidationStatus.VALID and has_warning:
+        if self.status == ValidationStatus.VALID and has_warning:
             raise ValidationRuleViolation(
                 "A valid result with warning messages must use the "
                 "valid_with_warnings status."

@@ -21,9 +21,9 @@ from poli_insight.presentation.streamlit.auth.ports import AuthenticationAdapter
 def create_authentication_adapter(
     settings: AuthenticationSettings,
 ) -> AuthenticationAdapter:
-    if settings.backend is AuthBackend.DEVELOPMENT:
+    if settings.backend == AuthBackend.DEVELOPMENT:
         return DevelopmentAuthAdapter(admin_role=settings.admin_role)
-    if settings.backend is AuthBackend.STREAMLIT_OIDC:
+    if settings.backend == AuthBackend.STREAMLIT_OIDC:
         return StreamlitOidcAuthAdapter(
             role_claim_names=settings.role_claim_names,
         )

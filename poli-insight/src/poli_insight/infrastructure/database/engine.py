@@ -17,6 +17,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.models import audit as audit_models
 from poli_insight.infrastructure.database.models import (
+    operations as operations_models,
+)
+from poli_insight.infrastructure.database.models import (
     participation as participation_models,
 )
 from poli_insight.infrastructure.database.models import scenario as scenario_models
@@ -24,17 +27,21 @@ from poli_insight.infrastructure.database.models import session as session_model
 from poli_insight.infrastructure.database.models import (
     submission as submission_models,
 )
-
+from poli_insight.infrastructure.database.models import (
+    validation as validation_models,
+)
 
 # These imports form the model-registration boundary for normal application
 # startup. Keeping explicit aliases makes that side effect visible and prevents
 # formatters from treating the imports as accidentally unused.
 _REGISTERED_MODEL_MODULES = (
     audit_models,
+    operations_models,
     participation_models,
     scenario_models,
     session_models,
     submission_models,
+    validation_models,
 )
 
 

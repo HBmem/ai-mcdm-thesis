@@ -159,7 +159,7 @@ class ValidationRequest:
 
     def _validate_validation_state(self) -> None:
         self.validation.validate_integrity()
-        if self.validation.status is not ValidationStatus.RUNNING:
+        if self.validation.status != ValidationStatus.RUNNING:
             raise ValidatorContractViolation(
                 "A validator request requires a running validation attempt."
             )
@@ -202,7 +202,7 @@ class ValidationRequest:
             raise ValidatorContractViolation(
                 "Loaded scenario snapshot does not match the validation input."
             )
-        if self.scenario_snapshot.status is not ScenarioSnapshotStatus.READY:
+        if self.scenario_snapshot.status != ScenarioSnapshotStatus.READY:
             raise ValidatorContractViolation(
                 "Validation requires a ready scenario snapshot."
             )
@@ -216,7 +216,7 @@ class ValidationRequest:
 
     def _validate_algorithm_binding(self) -> None:
         self.algorithm_config.validate_integrity()
-        if self.algorithm_config.role is not AlgorithmRole.VALIDATION:
+        if self.algorithm_config.role != AlgorithmRole.VALIDATION:
             raise ValidatorContractViolation(
                 "Validation requires an algorithm configuration with the "
                 "validation role."

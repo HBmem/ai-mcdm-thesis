@@ -38,7 +38,7 @@ class AuthenticationSettings:
                 "At least one role claim name is required."
             )
         if (
-            self.backend is AuthBackend.DEVELOPMENT
+            self.backend == AuthBackend.DEVELOPMENT
             and normalized_environment != "development"
         ):
             raise AuthConfigurationError(

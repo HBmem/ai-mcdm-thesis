@@ -354,12 +354,12 @@ def apply_participant_state(
     ):
         raise ValueError("Participant update history cannot move backward.")
 
-    if persisted_status is ParticipantAccessStatus.WITHDRAWN:
+    if persisted_status == ParticipantAccessStatus.WITHDRAWN:
         if participant_to_domain(row) != participant:
             raise ValueError("Withdrawn participant state cannot be changed.")
         return
     if (
-        persisted_status is not ParticipantAccessStatus.ACTIVE
+        persisted_status != ParticipantAccessStatus.ACTIVE
         and str(row.session_stakeholder_group_id)
         != participant.session_stakeholder_group_id
     ):

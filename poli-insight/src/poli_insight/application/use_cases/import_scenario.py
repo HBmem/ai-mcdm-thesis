@@ -30,6 +30,11 @@ from typing import Any, Protocol
 import pandas as pd
 
 from poli_insight.application.ports.unit_of_work import UnitOfWork
+from poli_insight.application.response_scale_catalog import (
+    APPLICATION_SCALE_CATALOG_VERSION,
+    response_scale_catalog_document,
+    response_scale_import_documents,
+)
 from poli_insight.core.ids import new_id
 from poli_insight.core.time import utc_now
 from poli_insight.domain.audit import AuditEvent
@@ -61,7 +66,7 @@ UnitOfWorkFactory = Callable[[], UnitOfWork]
 Clock = Callable[[], datetime]
 IdFactory = Callable[[], str]
 
-IMPORTER_VERSION = "poli-insight-scenario-importer/1"
+IMPORTER_VERSION = "poli-insight-scenario-importer/2"
 MANIFEST_SCHEMA_VERSION = 1
 
 
@@ -120,7 +125,7 @@ class ImportScenarioResult:
 
     @property
     def ready(self) -> bool:
-        return self.status is ScenarioSnapshotStatus.READY
+        return self.status == ScenarioSnapshotStatus.READY
 
 
 @dataclass(frozen=True, slots=True)
@@ -945,6 +950,18 @@ def _prepare_snapshot_content(
         }
         for source_file in documents.files
     ]
+    raw_preference = documents.scenario.get("preference_collection", {})
+    preference = raw_preference if isinstance(raw_preference, Mapping) else {}
+    raw_stakeholder_groups = documents.scenario.get("stakeholder_groups", [])
+    stakeholder_groups = (
+        [
+            dict(item)
+            for item in raw_stakeholder_groups
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(raw_stakeholder_groups, list)
+        else []
+    )
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "scenario_key": documents.scenario["scenario_id"],
@@ -959,6 +976,15 @@ def _prepare_snapshot_content(
                 len(_alternative_specs(documents.scenario))
                 * len(_criteria_specs(documents.criteria))
             ),
+        },
+        "application_response_scale_catalog": {
+            "version": APPLICATION_SCALE_CATALOG_VERSION,
+            "content_hash": hash_json(response_scale_catalog_document()),
+        },
+        "configuration_defaults": {
+            "default_response_method": preference.get("default_method"),
+            "default_scale_key": preference.get("default_scale_id"),
+            "stakeholder_groups": stakeholder_groups,
         },
     }
     return _PreparedSnapshotContent(
@@ -1184,8 +1210,14 @@ def _build_scales(
     raw_scales = scenario.get("scales", {})
     if not isinstance(raw_scales, Mapping):
         raise ScenarioImportError("scenario.scales must be an object")
+    # Scenario-authored scales remain available as custom choices, but the
+    # versioned application catalog is authoritative for stable built-in keys.
+    # This keeps scenario.json advisory while preserving the existing snapshot
+    # FK boundary used by immutable session configurations.
+    resolved_scales = dict(raw_scales)
+    resolved_scales.update(response_scale_import_documents())
     scales: list[ScenarioScale] = []
-    for scale_key, raw_scale in sorted(raw_scales.items()):
+    for scale_key, raw_scale in sorted(resolved_scales.items()):
         scale_key = _require_text(scale_key, "scale key")
         scale = _as_object(raw_scale, f"scenario.scales.{scale_key}")
         scale_id = id_factory()
@@ -1323,7 +1355,7 @@ def _build_matrix_values(
                 "criterion_key": criterion_key,
                 "source_column": column,
             }
-            if data_type is CriterionDataType.NUMERIC:
+            if data_type == CriterionDataType.NUMERIC:
                 values.append(
                     ScenarioMatrixValue(
                         alternative_id=alternative_ids[alternative_key],
@@ -1361,7 +1393,7 @@ def _matrix_hash_document(
             )
             values[criterion_key] = (
                 _decimal(row[column])
-                if data_type is CriterionDataType.NUMERIC
+                if data_type == CriterionDataType.NUMERIC
                 else _plain_scalar(row[column])
             )
         rows.append(
@@ -1650,7 +1682,7 @@ def _capture_file(
     logical_path = resolved.relative_to(base).as_posix()
     existing = captured.get(logical_path)
     if existing is not None:
-        if existing.role is not role and role is not ScenarioFileRole.CUSTOM_FUNCTION:
+        if existing.role != role and role != ScenarioFileRole.CUSTOM_FUNCTION:
             raise ScenarioImportError(
                 f"File {logical_path!r} is referenced with conflicting roles"
             )

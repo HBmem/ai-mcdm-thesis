@@ -29,7 +29,7 @@ def render(context: PageContext) -> None:
                 """)
                 with st.container(border=True, key="home_metrics"):
                     st.markdown("Active Right Now")
-                    st.html(f"<p style='font-size:24px;'>{metrics.total_active_sessions}</p>")
+                    st.html(f"<p style='font-size:24px; margin: 0 0 0 0'>{metrics.total_active_sessions}</p>")
                     st.markdown(f"**{metrics.total_participants_today} participants today**")
 
     st.divider()
@@ -40,7 +40,7 @@ def render(context: PageContext) -> None:
         (
             "Participate in a session",
             "Browse listed sessions or use an invitation to contribute your "
-            "preferences. No account required — takes 5–15 minutes.",
+            "preferences. No account required — takes 5-15 minutes.",
             "Participate",
             ":material/how_to_vote:",
         ),
@@ -81,7 +81,7 @@ def render(context: PageContext) -> None:
                 st.markdown(f"### {title}")
                 st.write(description)
                 if st.button(f"{route_name}", use_container_width=True):
-                    st.switch_page(context.routes[route_name]),
+                    st.switch_page(context.routes[route_name.lower()]),
 
     st.divider()
     st.subheader("How it works", anchor=False)

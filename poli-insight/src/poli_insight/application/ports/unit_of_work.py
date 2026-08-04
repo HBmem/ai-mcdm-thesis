@@ -1,10 +1,24 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, Self
 
+from poli_insight.application.ports.algorithm_repository import (
+    AlgorithmRepository,
+)
 from poli_insight.application.ports.audit_repository import AuditEventRepository
+from poli_insight.application.ports.operations_repository import (
+    InvitationImportRepository,
+    SubmissionReviewRepository,
+)
 from poli_insight.application.ports.participant_repository import (
+    ParticipantAccessGrantRepository,
     ParticipantRepository,
+    SessionInvitationRepository,
+)
+from poli_insight.application.ports.participation_access import (
+    AccessAttemptRepository,
+    EnrollmentAccessCodeRepository,
+    ParticipantConsentRepository,
 )
 from poli_insight.application.ports.scenario_repository import ScenarioRepository
 from poli_insight.application.ports.session_repository import SessionRepository
@@ -17,14 +31,22 @@ from poli_insight.application.ports.validation_repository import (
 
 
 class UnitOfWork(Protocol):
+    algorithms: AlgorithmRepository
     audit_events: AuditEventRepository
     scenarios: ScenarioRepository
     session: SessionRepository
     participants: ParticipantRepository
+    invitations: SessionInvitationRepository
+    access_grants: ParticipantAccessGrantRepository
+    access_codes: EnrollmentAccessCodeRepository
+    access_attempts: AccessAttemptRepository
+    consents: ParticipantConsentRepository
     submissions: SubmissionRepository
     validations: ValidationRepository
+    submission_reviews: SubmissionReviewRepository
+    invitation_imports: InvitationImportRepository
 
-    def __enter__(self) -> "UnitOfWork":
+    def __enter__(self) -> Self:
         ...
 
     def __exit__(self, exc_type, exc, tb) -> None:

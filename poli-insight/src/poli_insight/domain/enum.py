@@ -7,6 +7,7 @@ Enums values are persistent database/API values.
 
 from enum import StrEnum
 
+
 class ScenarioDefinitionStatus(StrEnum):
     ACTIVE = "active"
     RETIRED = "retired"
@@ -131,6 +132,12 @@ class ValidationStatus(StrEnum):
     INVALID = "invalid"
     ERROR = "error"
 
+class SubmissionReviewStatus(StrEnum):
+    PENDING = "pending"
+    NEEDS_REVIEW = "needs_review"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
 class MessageSeverity(StrEnum):
     INFO = "info"
     WARNING = "warning"
@@ -203,8 +210,14 @@ class ActorType(StrEnum):
 class AuditAction(StrEnum):
     CREATED = "created"
     UPDATED = "updated"
+    ACTIVATED = "activated"
+    SCHEDULED = "scheduled"
     OPENED = "opened"
+    PAUSED = "paused"
+    RESUMED = "resumed"
     CLOSED = "closed"
+    CANCELED = "canceled"
+    ARCHIVED = "archived"
     INVITED = "invited"
     REDEEMED = "redeemed"
     SUBMITTED = "submitted"

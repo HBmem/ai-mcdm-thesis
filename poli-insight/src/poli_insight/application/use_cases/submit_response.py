@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from poli_insight.application.ports.unit_of_work import UnitOfWork
+from poli_insight.application.use_cases.participant_access import (
+    ParticipantAccessError,
+    authorize_participant_access,
+    require_consent,
+)
 from poli_insight.core.ids import new_id
 from poli_insight.core.time import utc_now
 from poli_insight.domain.audit import AuditEvent
@@ -31,7 +36,6 @@ from poli_insight.domain.submission import (
     SubmissionRuleViolation,
 )
 
-
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 Clock = Callable[[], datetime]
 IdFactory = Callable[[], str]
@@ -41,7 +45,7 @@ class SubmitResponseError(ValueError):
     """Expected application failure while finalizing a response."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class SubmitResponseCommand:
     """Identity and audit context for finalizing the current draft."""
 
@@ -50,6 +54,7 @@ class SubmitResponseCommand:
     submission_id: str
     actor_id: str
     actor_type: ActorType = ActorType.PARTICIPANT
+    access_token: str | None = None
     correlation_id: str = field(default_factory=lambda: str(new_id()))
     request_id: str | None = None
     causation_event_id: str | None = None
@@ -64,6 +69,17 @@ class SubmitResponseCommand:
         ):
             if not value.strip():
                 raise SubmitResponseError(f"{field_name} cannot be empty.")
+        if self.actor_type == ActorType.PARTICIPANT and not self.access_token:
+            raise SubmitResponseError(
+                "Participant submissions require a valid access token."
+            )
+
+    def __repr__(self) -> str:
+        return (
+            "SubmitResponseCommand("
+            f"session_id={self.session_id!r}, participant_id={self.participant_id!r}, "
+            f"submission_id={self.submission_id!r}, access_token=<redacted>)"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +124,7 @@ class SubmitResponse:
                 expected_session_id=command.session_id,
                 at=occurred_at,
             )
+            assert session is not None
             try:
                 plan = unit_of_work.submissions.lock_attempt_plan(
                     command.participant_id,
@@ -121,11 +138,26 @@ class SubmitResponse:
             participant = unit_of_work.participants.get(
                 command.participant_id
             )
+            if command.actor_type == ActorType.PARTICIPANT:
+                try:
+                    participant = authorize_participant_access(
+                        unit_of_work,
+                        access_token=command.access_token or "",
+                        at=occurred_at,
+                        expected_participant_id=command.participant_id,
+                    )
+                except ParticipantAccessError as error:
+                    raise SubmitResponseError(str(error)) from error
             _eligible_participant(
                 participant,
                 session=session,
                 configuration=configuration,
             )
+            assert participant is not None
+            try:
+                require_consent(unit_of_work, participant, configuration)
+            except ParticipantAccessError as error:
+                raise SubmitResponseError(str(error)) from error
             if plan.draft is None:
                 raise SubmitResponseError(
                     "Participant has no draft response to submit."
@@ -179,6 +211,15 @@ class SubmitResponse:
             if superseded is not None:
                 unit_of_work.submissions.save(superseded)
             unit_of_work.submissions.save(finalized)
+
+            if participant.submitted_at is None:
+                participant = participant.record_submission(
+                    actor_id=command.actor_id, at=occurred_at
+                )
+                participant = participant.complete(
+                    actor_id=command.actor_id, at=occurred_at
+                )
+                unit_of_work.participants.save(participant)
 
             submitted_event = _build_submitted_event(
                 finalized,
@@ -290,7 +331,7 @@ def _validate_draft_binding(
     participant: Participant,
     configuration: SessionConfigurationVersion,
 ) -> None:
-    if draft.status is not SubmissionStatus.DRAFT:
+    if draft.status != SubmissionStatus.DRAFT:
         raise SubmitResponseError("Only a draft response can be submitted.")
     if draft.participant_id != participant.participant_id:
         raise SubmitResponseError(

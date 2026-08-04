@@ -23,7 +23,6 @@ from poli_insight.domain.enum import (
 )
 from poli_insight.domain.session import Session, SessionRuleViolation
 
-
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 Clock = Callable[[], datetime]
 IdFactory = Callable[[], str]
@@ -33,7 +32,7 @@ class CreateSessionError(ValueError):
     """Expected application failure while creating a session."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class CreateSessionCommand:
     """Validated input needed to create one draft session."""
 
@@ -46,6 +45,7 @@ class CreateSessionCommand:
     discoverability: Discoverability = Discoverability.UNLISTED
     enrollment_mode: EnrollmentMode = EnrollmentMode.OPEN
     access_code_mode: AccessCodeMode = AccessCodeMode.NONE
+    shared_access_code: str | None = None
     identity_policy: str = "pseudonymous"
     stakeholder_selection_mode: StakeholderSelectionMode = (
         StakeholderSelectionMode.SELF_SELECT
@@ -68,6 +68,23 @@ class CreateSessionCommand:
         ):
             if not value.strip():
                 raise CreateSessionError(f"{field_name} cannot be empty.")
+        if self.access_code_mode == AccessCodeMode.SHARED_SESSION_CODE:
+            if self.shared_access_code is None or len(self.shared_access_code) < 6:
+                raise CreateSessionError(
+                    "A shared session code of at least 6 characters is required."
+                )
+        elif self.shared_access_code is not None:
+            raise CreateSessionError(
+                "A shared access code can only be set for shared-code sessions."
+            )
+
+    def __repr__(self) -> str:
+        return (
+            "CreateSessionCommand("
+            f"scenario_snapshot_id={self.scenario_snapshot_id!r}, "
+            f"public_slug={self.public_slug!r}, title={self.title!r}, "
+            "shared_access_code=<redacted>)"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +125,7 @@ class CreateSession:
                     "Scenario snapshot "
                     f"{command.scenario_snapshot_id!r} does not exist."
                 )
-            if snapshot.status is not ScenarioSnapshotStatus.READY:
+            if snapshot.status != ScenarioSnapshotStatus.READY:
                 raise CreateSessionError(
                     "A session can only be created from a ready scenario "
                     "snapshot."
@@ -147,6 +164,14 @@ class CreateSession:
                 raise CreateSessionError(str(error)) from error
 
             unit_of_work.session.add(session)
+            if command.access_code_mode == AccessCodeMode.SHARED_SESSION_CODE:
+                unit_of_work.access_codes.add_shared_code(
+                    access_code_id=self._id_factory(),
+                    session_id=session.session_id,
+                    plaintext_code=command.shared_access_code or "",
+                    created_at=occurred_at,
+                    created_by=command.actor_id,
+                )
             unit_of_work.audit_events.add(
                 _build_created_event(
                     session,

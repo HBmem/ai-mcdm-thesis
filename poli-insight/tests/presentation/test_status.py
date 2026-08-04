@@ -5,6 +5,7 @@ import unittest
 from poli_insight.domain.enum import (
     ReportApprovalStatus,
     RunStatus,
+    ScenarioSnapshotStatus,
     SessionStatus,
     ValidationStatus,
 )
@@ -31,6 +32,14 @@ class StatusPresentationTests(unittest.TestCase):
         self.assertEqual(
             status_presentation(ReportApprovalStatus.REVIEW_REQUIRED).tone,
             StatusTone.WARNING,
+        )
+        self.assertEqual(
+            status_presentation(ScenarioSnapshotStatus.READY).tone,
+            StatusTone.SUCCESS,
+        )
+        self.assertEqual(
+            status_presentation(ScenarioSnapshotStatus.INVALID).tone,
+            StatusTone.ERROR,
         )
 
 

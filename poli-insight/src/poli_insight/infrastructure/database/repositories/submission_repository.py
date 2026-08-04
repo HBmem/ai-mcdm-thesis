@@ -146,7 +146,7 @@ class SqlAlchemySubmissionRepository:
             (
                 submission
                 for submission in attempts
-                if submission.status is SubmissionStatus.DRAFT
+                if submission.status == SubmissionStatus.DRAFT
             ),
             None,
         )

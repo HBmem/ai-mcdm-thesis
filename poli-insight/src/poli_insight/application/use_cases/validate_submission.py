@@ -352,19 +352,19 @@ class ValidateSubmission:
 
 
 def _require_submitted_attempt(submission: Submission) -> None:
-    if submission.status is SubmissionStatus.DRAFT:
+    if submission.status == SubmissionStatus.DRAFT:
         raise ValidateSubmissionError(
             "A draft submission cannot be validated."
         )
-    if submission.status is SubmissionStatus.SUPERSEDED:
+    if submission.status == SubmissionStatus.SUPERSEDED:
         raise ValidateSubmissionError(
             "A superseded submission cannot start a new validation."
         )
-    if submission.status is SubmissionStatus.WITHDRAWN:
+    if submission.status == SubmissionStatus.WITHDRAWN:
         raise ValidateSubmissionError(
             "A withdrawn submission cannot be validated."
         )
-    if submission.status is not SubmissionStatus.SUBMITTED:
+    if submission.status != SubmissionStatus.SUBMITTED:
         raise ValidateSubmissionError(
             f"Unsupported submission status {submission.status.value!r}."
         )
@@ -421,7 +421,7 @@ def _validation_algorithm(
             "The requested validation algorithm is outside the frozen "
             "configuration."
         )
-    if algorithm.role is not AlgorithmRole.VALIDATION:
+    if algorithm.role != AlgorithmRole.VALIDATION:
         raise ValidateSubmissionError(
             "The requested algorithm configuration is not a validator."
         )

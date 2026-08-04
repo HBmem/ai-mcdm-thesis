@@ -95,7 +95,7 @@ def test_complete_validation_freezes_and_hashes_structured_outputs() -> None:
         at=COMPLETED_AT,
     )
 
-    assert completed.status is ValidationStatus.VALID
+    assert completed.status == ValidationStatus.VALID
     assert completed.is_terminal
     assert completed.is_usable_for_processing
     assert completed.input_hash == pending.input_hash
@@ -140,11 +140,11 @@ def test_warning_and_invalid_statuses_are_distinct_from_execution_error() -> Non
         at=COMPLETED_AT,
     )
 
-    assert warned.status is ValidationStatus.VALID_WITH_WARNING
+    assert warned.status == ValidationStatus.VALID_WITH_WARNING
     assert warned.is_usable_for_processing
-    assert invalid.status is ValidationStatus.INVALID
+    assert invalid.status == ValidationStatus.INVALID
     assert not invalid.is_usable_for_processing
-    assert failed.status is ValidationStatus.ERROR
+    assert failed.status == ValidationStatus.ERROR
     assert failed.failure_code == "validator.unavailable"
     assert not failed.is_usable_for_processing
 
@@ -226,7 +226,7 @@ def test_fuzzy_weights_require_ordered_triples_and_normalized_middle() -> None:
         at=COMPLETED_AT,
     )
 
-    assert completed.status is ValidationStatus.VALID
+    assert completed.status == ValidationStatus.VALID
     assert {weight.weight_shape for weight in completed.criterion_weights} == {
         "fuzzy"
     }

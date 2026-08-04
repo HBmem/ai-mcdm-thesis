@@ -125,7 +125,7 @@ def test_import_materializes_and_captures_public_safety_scenario() -> None:
 
     assert result.created is True
     assert result.ready is True
-    assert result.status is ScenarioSnapshotStatus.READY
+    assert result.status == ScenarioSnapshotStatus.READY
     assert len(result.root_hash) == 64
     assert len(result.materialized_input_hash) == 64
     assert unit_of_work.commit_count == 1
@@ -135,6 +135,19 @@ def test_import_materializes_and_captures_public_safety_scenario() -> None:
     assert len(snapshot.criteria) == 4
     assert len(snapshot.alternatives) == 4
     assert len(snapshot.matrix_values) == 16
+    assert {scale.scale_key for scale in snapshot.scales} >= {
+        "direct_five_point_v1",
+        "direct_seven_point_v1",
+        "pairwise_five_point_v1",
+        "pairwise_seven_point_v1",
+    }
+    application_scales = tuple(
+        scale
+        for scale in snapshot.scales
+        if scale.metadata_json.get("source") == "application"
+    )
+    assert len(application_scales) == 4
+    assert {len(scale.values) for scale in application_scales} == {5, 7}
     assert {item.logical_path for item in snapshot.files} == {
         "criteria.json",
         "data/data.csv",

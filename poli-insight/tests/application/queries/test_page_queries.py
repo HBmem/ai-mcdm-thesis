@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from poli_insight.application.queries.page_queries import (
     AdminDashboardSnapshot,
     PageResult,
+    ScenarioLibraryMetrics,
+    SessionCatalogMetrics,
 )
 from poli_insight.domain.enum import SessionStatus
 
@@ -37,6 +39,27 @@ class AdminDashboardSnapshotTests(unittest.TestCase):
 
         self.assertEqual(snapshot.count(SessionStatus.OPEN), 2)
         self.assertEqual(snapshot.count(SessionStatus.CLOSED), 0)
+
+
+class ScenarioLibraryMetricsTests(unittest.TestCase):
+    def test_rejects_negative_counts(self) -> None:
+        with self.assertRaises(ValueError):
+            ScenarioLibraryMetrics(
+                definition_count=1,
+                snapshot_count=1,
+                ready_count=1,
+                attention_count=-1,
+            )
+
+
+class SessionCatalogMetricsTests(unittest.TestCase):
+    def test_rejects_negative_counts(self) -> None:
+        with self.assertRaises(ValueError):
+            SessionCatalogMetrics(
+                total_count=1,
+                open_count=0,
+                attention_count=-1,
+            )
 
 
 if __name__ == "__main__":

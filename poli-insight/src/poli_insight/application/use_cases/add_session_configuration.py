@@ -106,7 +106,7 @@ class AddSessionConfiguration:
                 raise AddSessionConfigurationError(
                     "The session's scenario snapshot no longer exists."
                 )
-            if snapshot.status is not ScenarioSnapshotStatus.READY:
+            if snapshot.status != ScenarioSnapshotStatus.READY:
                 raise AddSessionConfigurationError(
                     "Configurations can only reference a ready scenario "
                     "snapshot."

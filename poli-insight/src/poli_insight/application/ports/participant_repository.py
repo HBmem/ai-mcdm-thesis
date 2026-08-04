@@ -7,6 +7,7 @@ and must never be passed to a repository implementation.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from poli_insight.domain.participation import (
@@ -93,6 +94,14 @@ class SessionInvitationRepository(Protocol):
 
     def save(self, invitation: SessionInvitation) -> None:
         """Persist replacement invitation lifecycle state."""
+        ...
+
+    def list_due_for_expiration(
+        self,
+        session_id: str,
+        at: datetime,
+    ) -> tuple[SessionInvitation, ...]:
+        """Load unexpired terminal candidates whose deadline has passed."""
         ...
 
 

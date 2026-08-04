@@ -252,7 +252,7 @@ def apply_submission_aggregate(
     persisted_status = SubmissionStatus(row.status)
     _validate_status_transition(persisted_status, submission.status)
 
-    if persisted_status is SubmissionStatus.DRAFT:
+    if persisted_status == SubmissionStatus.DRAFT:
         removed_answers = _synchronize_draft_answers(row, submission)
     else:
         _require_unchanged_finalized_evidence(row, submission)

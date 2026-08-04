@@ -41,7 +41,7 @@ class SubmissionAttemptPlan:
                 raise ValueError(
                     "An existing draft cannot also allocate a next attempt."
                 )
-            if self.draft.status is not SubmissionStatus.DRAFT:
+            if self.draft.status != SubmissionStatus.DRAFT:
                 raise ValueError("draft must have draft submission status.")
             self._validate_submission_scope(self.draft, "draft")
             if self.previous_submission is None:
@@ -58,7 +58,7 @@ class SubmissionAttemptPlan:
                     self.previous_submission,
                     "previous submission",
                 )
-                if self.previous_submission.status is SubmissionStatus.DRAFT:
+                if self.previous_submission.status == SubmissionStatus.DRAFT:
                     raise ValueError(
                         "A draft predecessor cannot precede another draft."
                     )
@@ -87,7 +87,7 @@ class SubmissionAttemptPlan:
             self.previous_submission,
             "previous submission",
         )
-        if self.previous_submission.status is SubmissionStatus.DRAFT:
+        if self.previous_submission.status == SubmissionStatus.DRAFT:
             raise ValueError(
                 "The previous submission must be a finalized attempt."
             )

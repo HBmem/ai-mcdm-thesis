@@ -125,11 +125,93 @@
 		]
 	},
 	"scales": {
-		"pairwise_seven_point_v1": {
+		"pairwise_five_point_v1": {
+			"name": "Pairwise Five Point V1",
 			"version": "1.0",
 			"elicitation_method": "pairwise_comparison",
 			"ordered": true,
-			"values": []
+			"values": [
+				{
+					"id": "right_strongly_preferred",
+					"label": "Right criterion is strongly preferred",
+					"ordinal": 0,
+					"numeric_value": 0.2
+				},
+				{
+					"id": "right_moderately_preferred",
+					"label": "Right criterion is moderately preferred",
+					"ordinal": 1,
+					"numeric_value": 0.3333333333
+				},
+				{
+					"id": "equally_preferred",
+					"label": "Both criteria are equally preferred",
+					"ordinal": 2,
+					"numeric_value": 1
+				},
+				{
+					"id": "left_moderately_preferred",
+					"label": "Left criterion is moderately preferred",
+					"ordinal": 3,
+					"numeric_value": 3
+				},
+				{
+					"id": "left_strongly_preferred",
+					"label": "Left criterion is strongly preferred",
+					"ordinal": 4,
+					"numeric_value": 5
+				}
+			]
+		},
+		"pairwise_seven_point_v1": {
+			"name": "Pairwise Seven Point V1",
+			"version": "1.0",
+			"elicitation_method": "pairwise_comparison",
+			"ordered": true,
+			"values": [
+				{
+					"id": "right_very_strongly_preferred",
+					"label": "Right criterion is very strongly preferred",
+					"ordinal": 0,
+					"numeric_value": 0.1428571429
+				},
+				{
+					"id": "right_strongly_preferred",
+					"label": "Right criterion is strongly preferred",
+					"ordinal": 1,
+					"numeric_value": 0.2
+				},
+				{
+					"id": "right_moderately_preferred",
+					"label": "Right criterion is moderately preferred",
+					"ordinal": 2,
+					"numeric_value": 0.3333333333
+				},
+				{
+					"id": "equally_preferred",
+					"label": "Both criteria are equally preferred",
+					"ordinal": 3,
+					"numeric_value": 1
+				},
+				{
+					"id": "left_moderately_preferred",
+					"label": "Left criterion is moderately preferred",
+					"ordinal": 4,
+					"numeric_value": 3
+				},
+				{
+					"id": "left_strongly_preferred",
+					"label": "Left criterion is strongly preferred",
+					"ordinal": 5,
+					"numeric_value": 5
+				},
+				{
+					"id": "left_very_strongly_preferred",
+					"label": "Left criterion is very strongly preferred",
+					"ordinal": 6,
+					"numeric_value": 7
+				}
+			]
 		}
 	},
 	"mcdm_methods": {

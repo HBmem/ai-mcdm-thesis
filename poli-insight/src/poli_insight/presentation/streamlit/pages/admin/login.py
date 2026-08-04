@@ -34,7 +34,7 @@ def render(context: PageContext) -> None:
         )
         return
 
-    if context.authentication.login_method is LoginMethod.OIDC_REDIRECT:
+    if context.authentication.login_method == LoginMethod.OIDC_REDIRECT:
         st.write(
             "Continue to the configured identity provider. Authorization is "
             "evaluated again after sign-in."
@@ -62,7 +62,7 @@ def render(context: PageContext) -> None:
     if not submitted:
         return
     result = context.authentication.login(password=password)
-    if result.status is LoginStatus.REJECTED:
+    if result.status == LoginStatus.REJECTED:
         raise UserFacingError(
             "The supplied credentials were not accepted.",
             title="Sign-in failed",

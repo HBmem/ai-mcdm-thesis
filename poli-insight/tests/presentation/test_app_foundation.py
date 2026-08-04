@@ -20,14 +20,14 @@ class AppFoundationTests(unittest.TestCase):
             app = AppTest.from_file("app.py", default_timeout=10).run()
 
         self.assertFalse(app.exception)
-        self.assertEqual(tuple(item.value for item in app.title), ("Poli Insight",))
         self.assertEqual(
-            tuple(item.label for item in app.get("page_link")),
-            (
-                "Participate in a session",
-                "View published results",
-                "Learn about the research",
-            ),
+            tuple(item.value for item in app.title),
+            ("Poli:primary[Insight]",),
+        )
+        self.assertTrue(
+            {"Participate", "Results", "About"}.issubset(
+                {item.label for item in app.button}
+            )
         )
 
     def test_development_admin_navigation_builds_only_when_explicit(self) -> None:

@@ -32,7 +32,7 @@ class LoginResult:
 
     @property
     def authenticated(self) -> bool:
-        return self.status is LoginStatus.AUTHENTICATED
+        return self.status == LoginStatus.AUTHENTICATED
 
 
 @dataclass(frozen=True, slots=True)

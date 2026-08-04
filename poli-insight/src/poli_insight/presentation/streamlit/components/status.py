@@ -11,6 +11,8 @@ import streamlit as st
 from poli_insight.domain.enum import (
     ReportApprovalStatus,
     RunStatus,
+    ScenarioDefinitionStatus,
+    ScenarioSnapshotStatus,
     SessionStatus,
     ValidationStatus,
 )
@@ -112,6 +114,30 @@ _REPORT_STATUS: dict[StrEnum, StatusPresentation] = {
     ),
 }
 
+_SCENARIO_DEFINITION_STATUS: dict[StrEnum, StatusPresentation] = {
+    ScenarioDefinitionStatus.ACTIVE: StatusPresentation(
+        "Active", ":material/check_circle:", StatusTone.SUCCESS
+    ),
+    ScenarioDefinitionStatus.RETIRED: StatusPresentation(
+        "Retired", ":material/archive:", StatusTone.NEUTRAL
+    ),
+}
+
+_SCENARIO_SNAPSHOT_STATUS: dict[StrEnum, StatusPresentation] = {
+    ScenarioSnapshotStatus.VALIDATING: StatusPresentation(
+        "Validating", ":material/progress_activity:", StatusTone.INFO
+    ),
+    ScenarioSnapshotStatus.READY: StatusPresentation(
+        "Ready", ":material/check_circle:", StatusTone.SUCCESS
+    ),
+    ScenarioSnapshotStatus.INVALID: StatusPresentation(
+        "Invalid", ":material/error:", StatusTone.ERROR
+    ),
+    ScenarioSnapshotStatus.RETIRED: StatusPresentation(
+        "Retired", ":material/archive:", StatusTone.NEUTRAL
+    ),
+}
+
 
 def status_presentation(value: StrEnum) -> StatusPresentation:
     for mapping in (
@@ -119,6 +145,8 @@ def status_presentation(value: StrEnum) -> StatusPresentation:
         _VALIDATION_STATUS,
         _RUN_STATUS,
         _REPORT_STATUS,
+        _SCENARIO_DEFINITION_STATUS,
+        _SCENARIO_SNAPSHOT_STATUS,
     ):
         presentation = mapping.get(value)
         if presentation is not None:
@@ -144,10 +172,14 @@ def render_status(value: StrEnum, *, detail: str | None = None) -> None:
 def _badge_color(
     tone: StatusTone,
 ) -> Literal["gray", "blue", "green", "orange", "red"]:
-    return {
+    colors: dict[
+        StatusTone,
+        Literal["gray", "blue", "green", "orange", "red"],
+    ] = {
         StatusTone.NEUTRAL: "gray",
         StatusTone.INFO: "blue",
         StatusTone.SUCCESS: "green",
         StatusTone.WARNING: "orange",
         StatusTone.ERROR: "red",
-    }[tone]
+    }
+    return colors[tone]

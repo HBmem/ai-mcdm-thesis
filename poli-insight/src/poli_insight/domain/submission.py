@@ -237,7 +237,7 @@ class SubmissionAnswer:
                 )
             return
 
-        if question.question_type is QuestionType.CRITERION_PAIR:
+        if question.question_type == QuestionType.CRITERION_PAIR:
             if self.rank_value is not None:
                 raise SubmissionRuleViolation(
                     "A pairwise answer cannot contain a rank value."
@@ -256,7 +256,7 @@ class SubmissionAnswer:
                 )
             return
 
-        if question.question_type is QuestionType.ALTERNATIVE_RANK:
+        if question.question_type == QuestionType.ALTERNATIVE_RANK:
             if self.rank_value is None:
                 raise SubmissionRuleViolation(
                     "A ranking answer requires a positive rank value."
@@ -460,7 +460,7 @@ class Submission:
 
     @property
     def is_editable(self) -> bool:
-        return self.status is SubmissionStatus.DRAFT
+        return self.status == SubmissionStatus.DRAFT
 
     @property
     def is_finalized(self) -> bool:
@@ -611,11 +611,11 @@ class Submission:
         _require_aware_datetime(at, "Submission supersession time")
         self.validate_integrity()
         replacement.validate_integrity()
-        if self.status is not SubmissionStatus.SUBMITTED:
+        if self.status != SubmissionStatus.SUBMITTED:
             raise SubmissionRuleViolation(
                 "Only an effective submitted attempt can be superseded."
             )
-        if replacement.status is not SubmissionStatus.SUBMITTED:
+        if replacement.status != SubmissionStatus.SUBMITTED:
             raise SubmissionRuleViolation(
                 "A replacement must be successfully submitted first."
             )
@@ -654,7 +654,7 @@ class Submission:
         _require_text(reason, "Submission withdrawal reason")
         _require_aware_datetime(at, "Submission withdrawal time")
         self.validate_integrity()
-        if self.status is not SubmissionStatus.SUBMITTED:
+        if self.status != SubmissionStatus.SUBMITTED:
             raise SubmissionRuleViolation(
                 "Only an effective submitted attempt can be withdrawn."
             )
@@ -900,7 +900,7 @@ class Submission:
             self.withdrawal_reason,
         )
 
-        if self.status is SubmissionStatus.DRAFT:
+        if self.status == SubmissionStatus.DRAFT:
             if any(value is not None for value in finalization_metadata):
                 raise SubmissionRuleViolation(
                     "Draft submission cannot contain finalization metadata."
@@ -924,7 +924,7 @@ class Submission:
                 "Unsupported submission answer manifest schema version."
             )
 
-        if self.status is SubmissionStatus.SUBMITTED:
+        if self.status == SubmissionStatus.SUBMITTED:
             if any(value is not None for value in supersession_metadata):
                 raise SubmissionRuleViolation(
                     "Submitted attempt cannot contain supersession metadata."
@@ -935,7 +935,7 @@ class Submission:
                 )
             return
 
-        if self.status is SubmissionStatus.SUPERSEDED:
+        if self.status == SubmissionStatus.SUPERSEDED:
             if not all(value is not None for value in supersession_metadata):
                 raise SubmissionRuleViolation(
                     "Superseded attempt requires complete supersession metadata."
@@ -946,7 +946,7 @@ class Submission:
                 )
             return
 
-        if self.status is SubmissionStatus.WITHDRAWN:
+        if self.status == SubmissionStatus.WITHDRAWN:
             if not all(value is not None for value in withdrawal_metadata):
                 raise SubmissionRuleViolation(
                     "Withdrawn attempt requires complete withdrawal metadata."
@@ -964,7 +964,7 @@ class Submission:
     def _require_draft_edit(self, *, actor_id: str, at: datetime) -> None:
         _require_actor(actor_id)
         _require_aware_datetime(at, "Submission edit time")
-        if self.status is not SubmissionStatus.DRAFT:
+        if self.status != SubmissionStatus.DRAFT:
             raise SubmissionRuleViolation(
                 "Only a draft submission can be edited."
             )
@@ -1046,7 +1046,7 @@ class Submission:
                     f"{sorted(missing_required)!r}."
                 )
 
-        if self.response_format is ResponseFormat.DIRECT_RANKING:
+        if self.response_format == ResponseFormat.DIRECT_RANKING:
             rank_values = [
                 answer.rank_value
                 for answer in self.answers
@@ -1121,7 +1121,7 @@ def _validate_resubmission_predecessor(
     configuration: SessionConfigurationVersion,
 ) -> None:
     predecessor.validate_integrity()
-    if predecessor.status is not SubmissionStatus.SUBMITTED:
+    if predecessor.status != SubmissionStatus.SUBMITTED:
         raise SubmissionRuleViolation(
             "A resubmission must follow the current submitted attempt."
         )

@@ -8,8 +8,8 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "streamlit[auth]>=1.58,<2",
-    "streamlit_extras",
-    "pydecision",
+    "streamlit-extras>=1.6,<2",
+    "pydecision==5.1.1",
     "pandas",
     "numpy",
     "sqlalchemy",
@@ -27,6 +27,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--import-mode=importlib"
 
 [tool.setuptools.packages.find]
 where = ["src"]

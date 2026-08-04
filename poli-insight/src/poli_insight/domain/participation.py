@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self, cast
 
 from poli_insight.domain.enum import (
     InvitationStatus,
@@ -29,12 +29,36 @@ from poli_insight.domain.session import (
     SessionStakeholderGroup,
 )
 
-
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class ParticipationRuleViolation(ValueError):
     """Raised when an operation violates a participation business rule."""
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantConsent:
+    """Immutable evidence that a participant accepted one consent version."""
+
+    participant_consent_id: str
+    participant_id: str
+    session_id: str
+    configuration_version_id: str
+    consent_version: str
+    statement_hash: str
+    accepted_at: datetime
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("Participant consent ID", self.participant_consent_id),
+            ("Consent participant ID", self.participant_id),
+            ("Consent session ID", self.session_id),
+            ("Consent configuration ID", self.configuration_version_id),
+            ("Consent version", self.consent_version),
+        ):
+            _require_text(value, field_name)
+        _require_sha256(self.statement_hash, "Consent statement hash")
+        _require_aware_datetime(self.accepted_at, "Consent accepted_at")
 
 
 class GroupChangeCutoff(StrEnum):
@@ -200,7 +224,7 @@ class SessionInvitation:
             "Presented invitation token digest",
         )
         _require_aware_datetime(at, "Invitation redemption time")
-        if self.status is not InvitationStatus.SENT:
+        if self.status != InvitationStatus.SENT:
             raise ParticipationRuleViolation(
                 "Only a sent invitation can be redeemed."
             )
@@ -327,11 +351,11 @@ class SessionInvitation:
             ("Invitation creator", self.created_by),
         ):
             _require_text(value, field_name)
-        for field_name, value in (
+        for field_name, optional_value in (
             ("Assigned group ID", self.assigned_group_id),
             ("Invitation token hint", self.token_hint),
         ):
-            _require_optional_text(value, field_name)
+            _require_optional_text(optional_value, field_name)
         _require_sha256(self.token_digest, "Invitation token digest")
         if self.identity_lookup_hash is not None:
             _require_sha256(
@@ -407,7 +431,7 @@ class SessionInvitation:
             raise ParticipationRuleViolation(
                 "Invitation redemption time and participant must be set together."
             )
-        if self.status is InvitationStatus.REDEEMED:
+        if self.status == InvitationStatus.REDEEMED:
             if not redemption_present or revocation_present:
                 raise ParticipationRuleViolation(
                     "Redeemed invitation requires only redemption metadata."
@@ -421,7 +445,7 @@ class SessionInvitation:
                 "Only a redeemed invitation may have redemption metadata."
             )
 
-        if self.status is InvitationStatus.REVOKED:
+        if self.status == InvitationStatus.REVOKED:
             if not all(
                 value is not None
                 for value in (
@@ -457,7 +481,7 @@ class SessionInvitation:
                 raise ParticipationRuleViolation(
                     "Sent invitation states require send metadata."
                 )
-        elif self.status is InvitationStatus.PENDING and has_send_metadata:
+        elif self.status == InvitationStatus.PENDING and has_send_metadata:
             raise ParticipationRuleViolation(
                 "Unsent invitation states cannot contain send metadata."
             )
@@ -538,7 +562,7 @@ class Participant:
                 configuration=configuration,
                 group=group,
             )
-            if invitation.status is not InvitationStatus.REDEEMED:
+            if invitation.status != InvitationStatus.REDEEMED:
                 raise ParticipationRuleViolation(
                     "Invitation must be redeemed before participant enrollment."
                 )
@@ -580,7 +604,7 @@ class Participant:
 
     @property
     def can_access(self) -> bool:
-        return self.access_status is ParticipantAccessStatus.ACTIVE
+        return self.access_status == ParticipantAccessStatus.ACTIVE
 
     def join(self, *, actor_id: str, at: datetime) -> Self:
         self._require_active_transition(actor_id=actor_id, at=at)
@@ -669,7 +693,7 @@ class Participant:
         _require_actor(actor_id)
         _require_text(reason, "Participant disable reason")
         self._require_update_time(at)
-        if self.access_status is not ParticipantAccessStatus.ACTIVE:
+        if self.access_status != ParticipantAccessStatus.ACTIVE:
             raise ParticipationRuleViolation(
                 "Only an active participant can be disabled."
             )
@@ -692,7 +716,7 @@ class Participant:
         _require_actor(actor_id)
         _require_text(reason, "Participant withdrawal reason")
         self._require_update_time(at)
-        if self.access_status is ParticipantAccessStatus.WITHDRAWN:
+        if self.access_status == ParticipantAccessStatus.WITHDRAWN:
             raise ParticipationRuleViolation(
                 "Participant is already withdrawn."
             )
@@ -737,13 +761,13 @@ class Participant:
             )
 
     def _group_change_cutoff_reached(self, cutoff: GroupChangeCutoff) -> bool:
-        if cutoff is GroupChangeCutoff.ENROLLMENT:
+        if cutoff == GroupChangeCutoff.ENROLLMENT:
             return True
-        if cutoff is GroupChangeCutoff.JOINED:
+        if cutoff == GroupChangeCutoff.JOINED:
             return self.joined_at is not None
-        if cutoff is GroupChangeCutoff.STARTED:
+        if cutoff == GroupChangeCutoff.STARTED:
             return self.started_at is not None
-        if cutoff is GroupChangeCutoff.SUBMITTED:
+        if cutoff == GroupChangeCutoff.SUBMITTED:
             return self.submitted_at is not None
         raise ParticipationRuleViolation(
             f"Unsupported group-change cutoff: {cutoff!r}."
@@ -757,7 +781,7 @@ class Participant:
     ) -> None:
         _require_actor(actor_id)
         self._require_update_time(at)
-        if self.access_status is not ParticipantAccessStatus.ACTIVE:
+        if self.access_status != ParticipantAccessStatus.ACTIVE:
             raise ParticipationRuleViolation(
                 "Participant access must be active for this operation."
             )
@@ -775,7 +799,7 @@ class Participant:
     ) -> Self:
         return replace(
             self,
-            **changes,
+            **cast(Any, changes),
             updated_at=at,
             updated_by=actor_id,
         )
@@ -790,12 +814,12 @@ class Participant:
             ("Participant updater", self.updated_by),
         ):
             _require_text(value, field_name)
-        for field_name, value in (
+        for field_name, optional_value in (
             ("Participant user ID", self.user_id),
             ("Participant invitation ID", self.invitation_id),
             ("Participant alias", self.alias),
         ):
-            _require_optional_text(value, field_name)
+            _require_optional_text(optional_value, field_name)
 
     def _validate_schedule(self) -> None:
         timestamps = {
@@ -867,7 +891,7 @@ class Participant:
             self.withdrawn_by,
             self.withdrawal_reason,
         )
-        if self.access_status is ParticipantAccessStatus.ACTIVE:
+        if self.access_status == ParticipantAccessStatus.ACTIVE:
             if any(value is not None for value in disabled_metadata):
                 raise ParticipationRuleViolation(
                     "Active participant cannot contain disable metadata."
@@ -876,7 +900,7 @@ class Participant:
                 raise ParticipationRuleViolation(
                     "Active participant cannot contain withdrawal metadata."
                 )
-        elif self.access_status is ParticipantAccessStatus.DISABLED:
+        elif self.access_status == ParticipantAccessStatus.DISABLED:
             if not all(value is not None for value in disabled_metadata):
                 raise ParticipationRuleViolation(
                     "Disabled participant requires complete disable metadata."
@@ -890,7 +914,7 @@ class Participant:
                 self.disable_reason or "",
                 "Participant disable reason",
             )
-        elif self.access_status is ParticipantAccessStatus.WITHDRAWN:
+        elif self.access_status == ParticipantAccessStatus.WITHDRAWN:
             if not all(value is not None for value in withdrawn_metadata):
                 raise ParticipationRuleViolation(
                     "Withdrawn participant requires complete withdrawal metadata."
@@ -1043,28 +1067,29 @@ class ParticipantAccessGrant:
         ):
             _require_text(value, field_name)
         _require_sha256(self.token_digest, "Access grant token digest")
-        for field_name, value in (
+        for field_name, timestamp in (
             ("Access grant issued_at", self.issued_at),
             ("Access grant expires_at", self.expires_at),
             ("Access grant last_used_at", self.last_used_at),
             ("Access grant revoked_at", self.revoked_at),
         ):
-            _require_aware_datetime(value, field_name)
-        for field_name, value in (
+            _require_aware_datetime(timestamp, field_name)
+        for field_name, optional_value in (
             ("Access grant revoker", self.revoked_by),
             ("Access grant revocation reason", self.revocation_reason),
             ("Replacement access grant ID", self.replaced_by_grant_id),
         ):
-            _require_optional_text(value, field_name)
+            _require_optional_text(optional_value, field_name)
         if self.expires_at <= self.issued_at:
             raise ParticipationRuleViolation(
                 "Access grant expires_at must be later than issued_at."
             )
-        if self.last_used_at is not None:
-            if not self.issued_at <= self.last_used_at < self.expires_at:
-                raise ParticipationRuleViolation(
-                    "Access grant last use must be within its validity period."
-                )
+        if self.last_used_at is not None and not (
+            self.issued_at <= self.last_used_at < self.expires_at
+        ):
+            raise ParticipationRuleViolation(
+                "Access grant last use must be within its validity period."
+            )
         revocation_metadata = (
             self.revoked_at,
             self.revoked_by,

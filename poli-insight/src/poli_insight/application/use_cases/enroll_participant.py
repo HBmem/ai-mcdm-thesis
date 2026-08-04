@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 from poli_insight.application.ports.audit_repository import (
     AuditEventRepository,
@@ -15,6 +14,13 @@ from poli_insight.application.ports.participant_repository import (
     ParticipantAccessGrantRepository,
     ParticipantRepository,
     SessionInvitationRepository,
+)
+from poli_insight.application.ports.participation_access import (
+    AccessAttemptOutcome,
+    AccessAttemptRecord,
+    AccessAttemptRepository,
+    AccessCodeVerificationResult,
+    EnrollmentAccessCodeRepository,
 )
 from poli_insight.application.ports.session_repository import SessionRepository
 from poli_insight.core.ids import new_id
@@ -46,7 +52,6 @@ from poli_insight.infrastructure.auth.tokens import (
     generate_token,
 )
 
-
 Clock = Callable[[], datetime]
 IdFactory = Callable[[], str]
 JsonObject = Mapping[str, Any]
@@ -61,94 +66,6 @@ _SAFE_NETWORK_METADATA_KEYS = frozenset(
 )
 
 
-class AccessAttemptOutcome(StrEnum):
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
-
-
-@dataclass(frozen=True, slots=True)
-class AccessCodeVerificationResult:
-    """Secret-free result from the slow-hash access-code adapter."""
-
-    accepted: bool
-    reason_code: str
-    access_code_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.reason_code.strip():
-            raise ValueError("reason_code cannot be empty.")
-        if self.accepted and self.access_code_id is None:
-            raise ValueError(
-                "Accepted access-code verification requires access_code_id."
-            )
-
-
-class EnrollmentAccessCodeRepository(Protocol):
-    """Verify human-chosen codes using a slow password-hash implementation."""
-
-    def verify_for_enrollment(
-        self,
-        *,
-        session_id: str,
-        invitation_id: str | None,
-        plaintext_code: str,
-        at: datetime,
-    ) -> AccessCodeVerificationResult:
-        """Verify and lock the applicable code without recording a use."""
-        ...
-
-    def record_successful_use(
-        self,
-        *,
-        access_code_id: str,
-        at: datetime,
-    ) -> None:
-        """Increment use only after every enrollment check has succeeded."""
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class AccessAttemptRecord:
-    """Minimized security record that never contains submitted credentials."""
-
-    access_attempt_id: str
-    session_id: str
-    attempted_at: datetime
-    outcome: AccessAttemptOutcome
-    reason_code: str
-    invitation_id: str | None = None
-    access_code_id: str | None = None
-    rate_limit_key_hash: str | None = None
-    network_metadata_json: JsonObject = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        for field_name, value in (
-            ("access_attempt_id", self.access_attempt_id),
-            ("session_id", self.session_id),
-            ("reason_code", self.reason_code),
-        ):
-            if not value.strip():
-                raise ValueError(f"{field_name} cannot be empty.")
-        if (
-            self.attempted_at.tzinfo is None
-            or self.attempted_at.utcoffset() is None
-        ):
-            raise ValueError("attempted_at must include timezone information.")
-        if (
-            self.rate_limit_key_hash is not None
-            and not _is_sha256(self.rate_limit_key_hash)
-        ):
-            raise ValueError(
-                "rate_limit_key_hash must be a lowercase SHA-256 digest."
-            )
-
-
-class AccessAttemptRepository(Protocol):
-    def add(self, attempt: AccessAttemptRecord) -> None:
-        """Add a secret-free access attempt to the current transaction."""
-        ...
-
-
 class EnrollmentUnitOfWork(Protocol):
     """Repositories required to enroll and audit in one transaction."""
 
@@ -160,7 +77,7 @@ class EnrollmentUnitOfWork(Protocol):
     access_attempts: AccessAttemptRepository
     audit_events: AuditEventRepository
 
-    def __enter__(self) -> EnrollmentUnitOfWork:
+    def __enter__(self) -> Self:
         ...
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -213,20 +130,20 @@ class EnrollParticipantCommand:
                 raise EnrollParticipantError(
                     f"{field_name} cannot be empty."
                 )
-        for field_name, value in (
+        for field_name, optional_value in (
             ("selected_group_id", self.selected_group_id),
             ("user_id", self.user_id),
             ("alias", self.alias),
         ):
-            if value is not None and not value.strip():
+            if optional_value is not None and not optional_value.strip():
                 raise EnrollParticipantError(
                     f"{field_name} cannot be blank when provided."
                 )
-        for field_name, value in (
+        for field_name, hash_value in (
             ("identity_lookup_hash", self.identity_lookup_hash),
             ("rate_limit_key_hash", self.rate_limit_key_hash),
         ):
-            if value is not None and not _is_sha256(value):
+            if hash_value is not None and not _is_sha256(hash_value):
                 raise EnrollParticipantError(
                     f"{field_name} must be a lowercase SHA-256 digest."
                 )
@@ -359,7 +276,7 @@ class EnrollParticipant:
         # Discoverability controls listings only. It is deliberately absent
         # from this admission decision.
         if (
-            session.status is not SessionStatus.OPEN
+            session.status != SessionStatus.OPEN
             or not session.can_accept_submissions(at=occurred_at)
         ):
             raise _RejectEnrollment("session_unavailable")
@@ -465,7 +382,7 @@ class EnrollParticipant:
         invitation: SessionInvitation | None,
     ) -> None:
         if (
-            session.enrollment_mode is EnrollmentMode.INVITATION_ONLY
+            session.enrollment_mode == EnrollmentMode.INVITATION_ONLY
             and invitation is None
         ):
             raise _RejectEnrollment("invalid_credentials")
@@ -479,12 +396,12 @@ class EnrollParticipant:
         command: EnrollParticipantCommand,
         occurred_at: datetime,
     ) -> AccessCodeVerificationResult | None:
-        if session.access_code_mode is AccessCodeMode.NONE:
+        if session.access_code_mode == AccessCodeMode.NONE:
             return None
         if command.access_code is None:
             raise _RejectEnrollment("invalid_credentials")
         if (
-            session.access_code_mode is AccessCodeMode.PER_INVITATION_CODE
+            session.access_code_mode == AccessCodeMode.PER_INVITATION_CODE
             and invitation is None
         ):
             raise _RejectEnrollment("invalid_credentials")
@@ -494,7 +411,7 @@ class EnrollParticipant:
             invitation_id=(
                 invitation.invitation_id
                 if session.access_code_mode
-                is AccessCodeMode.PER_INVITATION_CODE
+                == AccessCodeMode.PER_INVITATION_CODE
                 and invitation is not None
                 else None
             ),
@@ -646,13 +563,13 @@ def _resolve_group(
         ):
             raise _RejectEnrollment("invalid_group_selection")
         group_id = assigned_group_id
-    elif session.stakeholder_selection_mode is StakeholderSelectionMode.SELF_SELECT:
+    elif session.stakeholder_selection_mode == StakeholderSelectionMode.SELF_SELECT:
         if selected_group_id is None:
             raise _RejectEnrollment("group_selection_required")
         group_id = selected_group_id
     elif (
         session.stakeholder_selection_mode
-        is StakeholderSelectionMode.INVITATION_ASSIGNED
+        == StakeholderSelectionMode.INVITATION_ASSIGNED
     ):
         raise _RejectEnrollment("invalid_group_selection")
     else:
@@ -678,9 +595,7 @@ def _safe_network_metadata(metadata: JsonObject) -> dict[str, object]:
     safe: dict[str, object] = {}
     for key in _SAFE_NETWORK_METADATA_KEYS:
         value = metadata.get(key)
-        if isinstance(value, (bool, int)):
-            safe[key] = value
-        elif isinstance(value, str) and len(value) <= 200:
+        if isinstance(value, (bool, int)) or isinstance(value, str) and len(value) <= 200:
             safe[key] = value
     return safe
 

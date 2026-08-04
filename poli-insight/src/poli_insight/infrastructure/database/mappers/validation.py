@@ -296,7 +296,7 @@ def apply_validation_aggregate(
             )
         return
 
-    if persisted.status is validation.status:
+    if persisted.status == validation.status:
         if persisted != validation:
             raise InvalidValidationTransitionError(
                 "Validation state cannot change without a lifecycle "

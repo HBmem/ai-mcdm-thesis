@@ -8,6 +8,11 @@ from datetime import datetime
 from typing import Any
 
 from poli_insight.application.ports.unit_of_work import UnitOfWork
+from poli_insight.application.use_cases.participant_access import (
+    ParticipantAccessError,
+    authorize_participant_access,
+    require_consent,
+)
 from poli_insight.core.ids import new_id
 from poli_insight.core.time import utc_now
 from poli_insight.domain.audit import AuditEvent
@@ -32,7 +37,6 @@ from poli_insight.domain.submission import (
     SubmissionAnswer,
     SubmissionRuleViolation,
 )
-
 
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 Clock = Callable[[], datetime]
@@ -74,7 +78,7 @@ class DraftAnswerInput:
             )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class SaveSubmissionDraftCommand:
     """Partial answer changes for the participant's current draft."""
 
@@ -87,6 +91,7 @@ class SaveSubmissionDraftCommand:
     )
     client_metadata_json: JsonObject = field(default_factory=dict)
     actor_type: ActorType = ActorType.PARTICIPANT
+    access_token: str | None = None
     correlation_id: str = field(default_factory=lambda: str(new_id()))
     request_id: str | None = None
     causation_event_id: str | None = None
@@ -106,7 +111,10 @@ class SaveSubmissionDraftCommand:
             raise SaveSubmissionDraftError(
                 "client_metadata_json must be a JSON object."
             )
-
+        if self.actor_type == ActorType.PARTICIPANT and not self.access_token:
+            raise SaveSubmissionDraftError(
+                "Participant draft saves require a valid access token."
+            )
         answer_question_ids = tuple(
             answer.question_definition_id for answer in self.answers
         )
@@ -135,6 +143,13 @@ class SaveSubmissionDraftCommand:
                 "A question cannot be updated and removed together: "
                 f"{sorted(overlap)!r}."
             )
+
+    def __repr__(self) -> str:
+        return (
+            "SaveSubmissionDraftCommand("
+            f"session_id={self.session_id!r}, participant_id={self.participant_id!r}, "
+            f"answer_count={len(self.answers)}, access_token=<redacted>)"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +193,7 @@ class SaveSubmissionDraft:
                 expected_session_id=command.session_id,
                 at=occurred_at,
             )
+            assert session is not None
             try:
                 plan = unit_of_work.submissions.lock_attempt_plan(
                     command.participant_id,
@@ -191,15 +207,57 @@ class SaveSubmissionDraft:
             participant = unit_of_work.participants.get(
                 command.participant_id
             )
+            if command.actor_type == ActorType.PARTICIPANT:
+                try:
+                    participant = authorize_participant_access(
+                        unit_of_work,
+                        access_token=command.access_token or "",
+                        at=occurred_at,
+                        expected_participant_id=command.participant_id,
+                    )
+                except ParticipantAccessError as error:
+                    raise SaveSubmissionDraftError(str(error)) from error
             group = _eligible_participant(
                 participant,
                 session=session,
                 configuration=configuration,
             )
+            assert participant is not None
+            try:
+                require_consent(unit_of_work, participant, configuration)
+            except ParticipantAccessError as error:
+                raise SaveSubmissionDraftError(str(error)) from error
+            snapshot = unit_of_work.scenarios.get_by_id(
+                configuration.scenario_snapshot_id
+            )
+            if snapshot is None:
+                raise SaveSubmissionDraftError(
+                    "The questionnaire scenario is unavailable."
+                )
+            scale = next(
+                (item for item in snapshot.scales if item.scale_id == configuration.scale_id),
+                None,
+            )
+            if scale is None or not scale.values:
+                raise SaveSubmissionDraftError(
+                    "The questionnaire response scale is unavailable."
+                )
+            allowed_scale_value_ids = {
+                item.scale_value_id for item in scale.values
+            }
 
             created = plan.draft is None
             try:
                 if plan.draft is None:
+                    if participant.joined_at is None:
+                        participant = participant.join(
+                            actor_id=command.actor_id, at=occurred_at
+                        )
+                    if participant.started_at is None:
+                        participant = participant.start(
+                            actor_id=command.actor_id, at=occurred_at
+                        )
+                    unit_of_work.participants.save(participant)
                     draft = Submission.start(
                         submission_id=self._id_factory(),
                         participant=participant,
@@ -227,6 +285,7 @@ class SaveSubmissionDraft:
                     configuration=configuration,
                     command=command,
                     occurred_at=occurred_at,
+                    allowed_scale_value_ids=allowed_scale_value_ids,
                 )
             except (
                 ParticipationRuleViolation,
@@ -268,12 +327,23 @@ class SaveSubmissionDraft:
         configuration: SessionConfigurationVersion,
         command: SaveSubmissionDraftCommand,
         occurred_at: datetime,
+        allowed_scale_value_ids: set[str],
     ) -> Submission:
         questions = {
             question.question_definition_id: question
             for question in configuration.question_definitions
         }
         for answer_input in command.answers:
+            selected_scale_value_id = answer_input.raw_value_json.get(
+                "selected_scale_value_id"
+            )
+            if (
+                selected_scale_value_id is not None
+                and selected_scale_value_id not in allowed_scale_value_ids
+            ):
+                raise SaveSubmissionDraftError(
+                    "Answer uses a value outside the configured response scale."
+                )
             question = questions.get(answer_input.question_definition_id)
             if question is None:
                 raise SaveSubmissionDraftError(
@@ -384,7 +454,7 @@ def _validate_draft_binding(
     participant: Participant,
     configuration: SessionConfigurationVersion,
 ) -> None:
-    if draft.status is not SubmissionStatus.DRAFT:
+    if draft.status != SubmissionStatus.DRAFT:
         raise SaveSubmissionDraftError(
             "Only a draft submission can receive answer updates."
         )

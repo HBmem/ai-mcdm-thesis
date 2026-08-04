@@ -7,6 +7,8 @@ from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import (
+    JSON,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     ForeignKeyConstraint,
@@ -751,3 +753,142 @@ class ParticipantAccessGrantRow(Base):
         UUIDString(),
         nullable=True,
     )
+
+
+class SessionAccessCodeRow(Base):
+    """Slow-hashed human access code scoped to a session or invitation."""
+
+    __tablename__ = "session_access_codes"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(code_hash)) > 0",
+            name="ck_session_access_codes_hash_nonempty",
+        ),
+        CheckConstraint(
+            "use_count >= 0",
+            name="ck_session_access_codes_use_count_nonnegative",
+        ),
+        CheckConstraint(
+            "max_uses IS NULL OR max_uses >= 1",
+            name="ck_session_access_codes_max_uses_positive",
+        ),
+        CheckConstraint(
+            "expires_at IS NULL OR expires_at > created_at",
+            name="ck_session_access_codes_expiration_order",
+        ),
+        UniqueConstraint(
+            "session_id",
+            "invitation_id",
+            name="uq_session_access_codes_scope",
+        ),
+        Index("ix_session_access_codes_session_active", "session_id", "active"),
+    )
+
+    access_code_id: Mapped[UUID] = mapped_column(UUIDString(), primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(
+        UUIDString(),
+        ForeignKey("sessions.session_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    invitation_id: Mapped[UUID | None] = mapped_column(
+        UUIDString(),
+        ForeignKey("session_invitations.invitation_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    code_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+    use_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class ParticipantAccessAttemptRow(Base):
+    """Secret-free admission attempt retained for security operations."""
+
+    __tablename__ = "participant_access_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('accepted', 'rejected')",
+            name="ck_participant_access_attempts_outcome_allowed",
+        ),
+        Index(
+            "ix_participant_access_attempts_session_time",
+            "session_id",
+            "attempted_at",
+        ),
+    )
+
+    access_attempt_id: Mapped[UUID] = mapped_column(UUIDString(), primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(
+        UUIDString(),
+        ForeignKey("sessions.session_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    invitation_id: Mapped[UUID | None] = mapped_column(
+        UUIDString(),
+        ForeignKey("session_invitations.invitation_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    access_code_id: Mapped[UUID | None] = mapped_column(
+        UUIDString(),
+        ForeignKey("session_access_codes.access_code_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    attempted_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    rate_limit_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    network_metadata_json: Mapped[dict[str, object]] = mapped_column(
+        JSON(none_as_null=True), nullable=False, default=dict
+    )
+
+
+class ParticipantConsentRow(Base):
+    """Immutable acceptance evidence for a configured consent statement."""
+
+    __tablename__ = "participant_consents"
+    __table_args__ = (
+        UniqueConstraint(
+            "participant_id",
+            "configuration_version_id",
+            "consent_version",
+            name="uq_participant_consents_version",
+        ),
+        CheckConstraint(
+            "length(statement_hash) = 64 AND statement_hash = lower(statement_hash)",
+            name="ck_participant_consents_statement_hash",
+        ),
+        Index("ix_participant_consents_participant", "participant_id"),
+    )
+
+    participant_consent_id: Mapped[UUID] = mapped_column(
+        UUIDString(), primary_key=True
+    )
+    participant_id: Mapped[UUID] = mapped_column(
+        UUIDString(),
+        ForeignKey("participants.participant_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    session_id: Mapped[UUID] = mapped_column(
+        UUIDString(),
+        ForeignKey("sessions.session_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    configuration_version_id: Mapped[UUID] = mapped_column(
+        UUIDString(),
+        ForeignKey(
+            "session_configuration_versions.configuration_version_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    consent_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    statement_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)

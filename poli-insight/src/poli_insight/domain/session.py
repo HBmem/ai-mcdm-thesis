@@ -10,11 +10,11 @@ keeps historical submissions pinned to an unchanged calculation contract.
 from __future__ import annotations
 
 import re
-from collections.abc import Hashable, Iterable
+from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Mapping, Self
+from typing import Any, Self
 
 from poli_insight.domain.content_hash import hash_json
 from poli_insight.domain.enum import (
@@ -31,7 +31,6 @@ from poli_insight.domain.enum import (
     StakeholderSelectionMode,
 )
 from poli_insight.domain.scenario import ScenarioSnapshot
-
 
 JsonObject = Mapping[str, Any]
 DEFAULT_ALLOCATION_TOTAL_UNITS = 10_000
@@ -217,7 +216,7 @@ class ResponseQuestionDefinition:
         self._validate_targets()
 
     def _validate_targets(self) -> None:
-        if self.question_type is QuestionType.CRITERION_PAIR:
+        if self.question_type == QuestionType.CRITERION_PAIR:
             if (
                 self.criterion_id is not None
                 or self.alternative_id is not None
@@ -241,7 +240,7 @@ class ResponseQuestionDefinition:
                 )
             return
 
-        if self.question_type is QuestionType.CRITERION_RATING:
+        if self.question_type == QuestionType.CRITERION_RATING:
             if (
                 self.criterion_id is None
                 or self.left_criterion_id is not None
@@ -255,7 +254,7 @@ class ResponseQuestionDefinition:
                 )
             return
 
-        if self.question_type is QuestionType.ALTERNATIVE_RATING:
+        if self.question_type == QuestionType.ALTERNATIVE_RATING:
             if (
                 self.alternative_id is None
                 or self.criterion_id is not None
@@ -269,7 +268,7 @@ class ResponseQuestionDefinition:
                 )
             return
 
-        if self.question_type is QuestionType.ALTERNATIVE_RANK:
+        if self.question_type == QuestionType.ALTERNATIVE_RANK:
             if (
                 self.alternative_id is None
                 or self.criterion_id is not None
@@ -404,7 +403,7 @@ class SessionConfigurationVersion:
                 "Minimum valid submissions must be at least 1."
             )
         if self.consistency_threshold is not None and not (
-            Decimal("0") <= self.consistency_threshold <= Decimal("1")
+            Decimal(0) <= self.consistency_threshold <= Decimal(1)
         ):
             raise SessionRuleViolation(
                 "Consistency threshold must be between 0 and 1."
@@ -550,13 +549,16 @@ class SessionConfigurationVersion:
             algorithm_id = group.within_group_algorithm_config_id
             if algorithm_id is None:
                 continue
-            algorithm = algorithm_by_id.get(algorithm_id)
-            if algorithm is None:
+            selected_algorithm = algorithm_by_id.get(algorithm_id)
+            if selected_algorithm is None:
                 raise SessionRuleViolation(
                     f"Stakeholder group {group.group_key!r} references an "
                     "unknown within-group algorithm configuration."
                 )
-            if algorithm.role is not AlgorithmRole.WITHIN_GROUP_AGGREGATION:
+            if (
+                selected_algorithm.role
+                != AlgorithmRole.WITHIN_GROUP_AGGREGATION
+            ):
                 raise SessionRuleViolation(
                     f"Stakeholder group {group.group_key!r} must reference an "
                     "algorithm with the within-group aggregation role."
@@ -590,7 +592,7 @@ class SessionConfigurationVersion:
             )
         expected_question_type = self._expected_question_type()
         for question in self.question_definitions:
-            if question.question_type is not expected_question_type:
+            if question.question_type != expected_question_type:
                 raise SessionRuleViolation(
                     f"Question {question.question_key!r} has type "
                     f"{question.question_type.value!r}; configuration requires "
@@ -608,24 +610,24 @@ class SessionConfigurationVersion:
         pair_targets = [
             (question.left_criterion_id, question.right_criterion_id)
             for question in self.question_definitions
-            if question.question_type is QuestionType.CRITERION_PAIR
+            if question.question_type == QuestionType.CRITERION_PAIR
         ]
         _require_unique(pair_targets, "Criterion-pair question targets")
 
     def _expected_question_type(self) -> QuestionType:
-        if self.response_format is ResponseFormat.PAIRWISE:
-            if self.response_target_type is not ResponseTargetType.CRITERION:
+        if self.response_format == ResponseFormat.PAIRWISE:
+            if self.response_target_type != ResponseTargetType.CRITERION:
                 raise SessionRuleViolation(
                     "Pairwise responses currently support criterion targets "
                     "only."
                 )
             return QuestionType.CRITERION_PAIR
-        if self.response_format is ResponseFormat.DIRECT_RATING:
-            if self.response_target_type is ResponseTargetType.CRITERION:
+        if self.response_format == ResponseFormat.DIRECT_RATING:
+            if self.response_target_type == ResponseTargetType.CRITERION:
                 return QuestionType.CRITERION_RATING
             return QuestionType.ALTERNATIVE_RATING
-        if self.response_format is ResponseFormat.DIRECT_RANKING:
-            if self.response_target_type is not ResponseTargetType.ALTERNATIVE:
+        if self.response_format == ResponseFormat.DIRECT_RANKING:
+            if self.response_target_type != ResponseTargetType.ALTERNATIVE:
                 raise SessionRuleViolation(
                     "Direct ranking requires alternative targets."
                 )
@@ -762,7 +764,7 @@ class Session:
 
         _require_actor(actor_id)
         _require_aware_datetime(at, "Scheduling time")
-        if self.status is not SessionStatus.DRAFT:
+        if self.status != SessionStatus.DRAFT:
             raise SessionRuleViolation(
                 "Only a draft session can be scheduled."
             )
@@ -799,7 +801,7 @@ class Session:
             raise SessionRuleViolation(
                 "Session cannot open with a different scenario snapshot."
             )
-        if scenario_snapshot.status is not ScenarioSnapshotStatus.READY:
+        if scenario_snapshot.status != ScenarioSnapshotStatus.READY:
             raise SessionRuleViolation(
                 "Session cannot open until its scenario snapshot is ready."
             )
@@ -823,7 +825,7 @@ class Session:
     def pause(self, *, actor_id: str, at: datetime) -> Self:
         _require_actor(actor_id)
         _require_aware_datetime(at, "Pause time")
-        if self.status is not SessionStatus.OPEN:
+        if self.status != SessionStatus.OPEN:
             raise SessionRuleViolation("Only an open session can be paused.")
         return self._transition(
             status=SessionStatus.PAUSED,
@@ -835,7 +837,7 @@ class Session:
     def resume(self, *, actor_id: str, at: datetime) -> Self:
         _require_actor(actor_id)
         _require_aware_datetime(at, "Resume time")
-        if self.status is not SessionStatus.PAUSED:
+        if self.status != SessionStatus.PAUSED:
             raise SessionRuleViolation("Only a paused session can be resumed.")
         if self.closes_at is not None and at >= self.closes_at:
             raise SessionRuleViolation(
@@ -896,13 +898,11 @@ class Session:
 
     def can_accept_submissions(self, *, at: datetime) -> bool:
         _require_aware_datetime(at, "Submission eligibility time")
-        if self.status is not SessionStatus.OPEN:
+        if self.status != SessionStatus.OPEN:
             return False
         if self.opens_at is not None and at < self.opens_at:
             return False
-        if self.closes_at is not None and at >= self.closes_at:
-            return False
-        return True
+        return self.closes_at is None or at < self.closes_at
 
     def _transition(
         self,
@@ -997,11 +997,14 @@ class Session:
         }
         for field_name, value in timestamps.items():
             _require_aware_datetime(value, field_name)
-        if self.opens_at is not None and self.closes_at is not None:
-            if self.closes_at <= self.opens_at:
-                raise SessionRuleViolation(
-                    "Session closes_at must be later than opens_at."
-                )
+        if (
+            self.opens_at is not None
+            and self.closes_at is not None
+            and self.closes_at <= self.opens_at
+        ):
+            raise SessionRuleViolation(
+                "Session closes_at must be later than opens_at."
+            )
         if self.updated_at < self.created_at:
             raise SessionRuleViolation(
                 "Session updated_at cannot precede created_at."
@@ -1021,8 +1024,8 @@ class Session:
 
     def _validate_access_configuration(self) -> None:
         if (
-            self.access_code_mode is AccessCodeMode.PER_INVITATION_CODE
-            and self.enrollment_mode is not EnrollmentMode.INVITATION_ONLY
+            self.access_code_mode == AccessCodeMode.PER_INVITATION_CODE
+            and self.enrollment_mode != EnrollmentMode.INVITATION_ONLY
         ):
             raise SessionRuleViolation(
                 "Per-invitation access codes require invitation-only enrollment."
@@ -1066,7 +1069,7 @@ class Session:
                 )
 
     def _validate_status_timestamps(self) -> None:
-        if self.status is SessionStatus.SCHEDULED and self.opens_at is None:
+        if self.status == SessionStatus.SCHEDULED and self.opens_at is None:
             raise SessionRuleViolation(
                 "A scheduled session requires opens_at."
             )
@@ -1078,19 +1081,19 @@ class Session:
             raise SessionRuleViolation(
                 f"A {self.status.value} session requires opened_at."
             )
-        if self.status is SessionStatus.PAUSED and self.paused_at is None:
+        if self.status == SessionStatus.PAUSED and self.paused_at is None:
             raise SessionRuleViolation(
                 "A paused session requires paused_at."
             )
-        if self.status is SessionStatus.CLOSED and self.closed_at is None:
+        if self.status == SessionStatus.CLOSED and self.closed_at is None:
             raise SessionRuleViolation(
                 "A closed session requires closed_at."
             )
-        if self.status is SessionStatus.CANCELED and self.canceled_at is None:
+        if self.status == SessionStatus.CANCELED and self.canceled_at is None:
             raise SessionRuleViolation(
                 "A canceled session requires canceled_at."
             )
-        if self.status is SessionStatus.ARCHIVED:
+        if self.status == SessionStatus.ARCHIVED:
             if self.archived_at is None:
                 raise SessionRuleViolation(
                     "An archived session requires archived_at."
