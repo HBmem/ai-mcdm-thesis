@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -76,6 +77,21 @@ from poli_insight.application.use_cases.open_session import (
     OpenSessionCommand,
     OpenSessionError,
 )
+from poli_insight.application.use_cases.participant_submission_import import (
+    ApplyParticipantSubmissionImportCommand,
+    GenerateImportedResumeLinksCommand,
+    GenerateImportedResumeLinksResult,
+    GenerateParticipantImportTemplateCommand,
+    ImportRowStatus,
+    ParticipantSubmissionImportError,
+    ParticipantSubmissionImportPreview,
+    PreviewParticipantSubmissionImportCommand,
+    RedactExpiredImportedIdentityCommand,
+)
+from poli_insight.application.use_cases.replace_participant_access_grant import (
+    ReplaceParticipantAccessGrantCommand,
+    ReplaceParticipantAccessGrantError,
+)
 from poli_insight.application.use_cases.review_submission import (
     ReviewSubmissionCommand,
     ReviewSubmissionError,
@@ -106,7 +122,6 @@ from poli_insight.domain.enum import (
 from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
     format_datetime,
-    render_capability_notice,
     render_empty_state,
     render_page_header,
 )
@@ -119,6 +134,10 @@ from poli_insight.presentation.streamlit.components.scenario_archive import (
 )
 from poli_insight.presentation.streamlit.components.status import render_status
 from poli_insight.presentation.streamlit.context import PageContext
+from poli_insight.presentation.streamlit.urls import (
+    private_invitation_url,
+    private_resume_url,
+)
 
 _PAGE_SIZE = 10
 _SESSION_SELECTED_KEY = "sessions:selected_session_id"
@@ -128,7 +147,19 @@ _CREATE_DIALOG_KEY = "session_create:dialog_open"
 _CREATE_GENERATION_KEY = "session_create:generation"
 _CONFIG_DIALOG_KEY = "session_config:dialog_open"
 _CONFIG_GENERATION_KEY = "session_config:generation"
+_ACCESS_REPLACE_DIALOG_KEY = "participant_access:replace_dialog"
+_NEW_RESUME_LINK_KEY = "participant_access:new_resume_link"
 _SESSION_SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _OneTimeResumeLink:
+    participant_id: str
+    resume_url: str
+    expires_at: datetime
+
+    def __repr__(self) -> str:
+        return "_OneTimeResumeLink(resume_url=<redacted>)"
 _SELECTED_SNAPSHOT_KEY = "scenario_library:selected_snapshot_id"
 _PAGE_KEY = "scenario_library:page"
 _FILTER_KEY = "scenario_library:filter_fingerprint"
@@ -144,6 +175,11 @@ _INVITATION_RESULT_KEY = "operations:invitation_result"
 _INVITATION_IMPORT_PREVIEW_KEY = "operations:invitation_import_preview"
 _INVITATION_IMPORT_CONTENT_KEY = "operations:invitation_import_content"
 _INVITATION_IMPORT_RESULT_KEY = "operations:invitation_import_result"
+_PARTICIPANT_IMPORT_PREFIX = "participant_import:"
+_PARTICIPANT_IMPORT_PREVIEW_KEY = f"{_PARTICIPANT_IMPORT_PREFIX}preview"
+_PARTICIPANT_IMPORT_CONTENT_KEY = f"{_PARTICIPANT_IMPORT_PREFIX}content"
+_PARTICIPANT_IMPORT_RESULT_KEY = f"{_PARTICIPANT_IMPORT_PREFIX}result"
+_PARTICIPANT_IMPORT_CREDENTIALS_KEY = f"{_PARTICIPANT_IMPORT_PREFIX}credentials"
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,13 +223,471 @@ def render(context: PageContext) -> None:
     with tabs[1]:
         _render_scenario_library(context)
     with tabs[2]:
-        render_capability_notice(
-            "Session-scoped operational imports",
-            "Invitation CSV imports are available inside each session workspace, "
-            "where the active configuration and participant groups can be validated.",
-        )
+        _render_participant_submission_imports(context)
     with tabs[3]:
         _render_admin_audit(context)
+
+
+def _render_participant_submission_imports(context: PageContext) -> None:
+    if getattr(context.container, "participant_imports", None) is None:
+        render_empty_state(
+            "Participant imports unavailable",
+            "The participant import services are not configured in this runtime.",
+            icon=":material/upload_file:",
+        )
+        return
+    maintenance_key = f"{_PARTICIPANT_IMPORT_PREFIX}retention_checked"
+    if not st.session_state.get(maintenance_key, False):
+        try:
+            context.container.participant_imports.redact_expired_identity.execute(
+                RedactExpiredImportedIdentityCommand(limit=25)
+            )
+        except ParticipantSubmissionImportError:
+            st.warning(
+                "Imported-identity retention maintenance could not run. "
+                "No identity values were displayed."
+            )
+        except Exception:  # noqa: BLE001 - never render persistence details or PII.
+            st.warning(
+                "Imported-identity retention maintenance could not run. "
+                "No identity values were displayed."
+            )
+        else:
+            st.session_state[maintenance_key] = True
+    st.subheader("Participant and submission imports", anchor=False)
+    st.write(
+        "Populate a frozen session configuration from a UTF-8 CSV or .xlsx "
+        "workbook. Preview is read-only; apply is atomic and audited."
+    )
+    sessions = context.queries.list_admin_sessions(page=1, page_size=100).items
+    eligible = tuple(
+        item for item in sessions if item.active_configuration_version is not None
+    )
+    selected_id = st.selectbox(
+        "1. Choose session",
+        options=(None, *(item.session_id for item in eligible)),
+        format_func=lambda value: (
+            "Select a configured session"
+            if value is None
+            else next(
+                f"{item.title} · {item.public_slug} · {item.status.value}"
+                for item in eligible
+                if item.session_id == value
+            )
+        ),
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}session",
+    )
+    if selected_id is None:
+        render_empty_state(
+            "Choose a session to begin",
+            "Templates and validation are generated from its activated frozen configuration.",
+            icon=":material/upload_file:",
+        )
+        return
+    try:
+        scope = context.container.participant_imports.get_session.execute(selected_id)
+    except ParticipantSubmissionImportError as error:
+        st.error(str(error), icon=":material/error:")
+        return
+
+    with st.container(border=True):
+        st.markdown(f"#### {scope.session_title}")
+        st.caption(
+            f"/{scope.session_slug} · {scope.lifecycle_state.value.title()} · "
+            f"{scope.scenario_title} {scope.scenario_version}"
+        )
+        facts = st.columns(4)
+        facts[0].metric("Configuration", f"v{scope.configuration_version}")
+        facts[1].metric("Required questions", scope.required_question_count)
+        facts[2].metric("Response", scope.response_format.value.replace("_", " "))
+        facts[3].metric("Target", scope.response_target_type.replace("_", " "))
+        st.markdown(
+            f"**Scale:** {scope.scale_name} v{scope.scale_version}  \n"
+            f"**Groups:** {', '.join(f'{key} ({name})' for key, name in scope.groups)}  \n"
+            f"**Incomplete submissions:** {'permitted' if scope.allow_incomplete_submission else 'not permitted'}  \n"
+            f"**Resubmissions:** {'permitted' if scope.allow_resubmissions else 'not permitted'}  \n"
+            f"**Consistency threshold:** {scope.consistency_threshold or 'not configured'}  \n"
+            f"**Consent:** {scope.consent_policy}  \n"
+            f"**Identity policy:** {scope.identity_policy}"
+        )
+
+    completed_result = st.session_state.get(_PARTICIPANT_IMPORT_RESULT_KEY)
+    if completed_result is not None:
+        _render_participant_import_result(context, scope, completed_result)
+        return
+
+    st.markdown("#### 2. Prepare template")
+    template_columns = st.columns(4)
+    template_specs = (
+        ("Blank Excel", "xlsx", False),
+        ("Blank CSV", "csv", False),
+        ("Example Excel", "xlsx", True),
+        ("Example CSV", "csv", True),
+    )
+    for column, (label, file_format, example) in zip(
+        template_columns, template_specs, strict=True
+    ):
+        try:
+            template = context.container.participant_imports.generate_template.execute(
+                GenerateParticipantImportTemplateCommand(
+                    session_id=selected_id,
+                    file_format=file_format,
+                    filled_example=example,
+                )
+            )
+        except ParticipantSubmissionImportError as error:
+            column.caption(str(error))
+        else:
+            column.download_button(
+                label,
+                data=template.content,
+                file_name=template.filename,
+                mime=template.media_type,
+                icon=":material/download:",
+                width="stretch",
+                key=f"{_PARTICIPANT_IMPORT_PREFIX}template:{file_format}:{example}",
+            )
+
+    st.markdown("#### 3. Upload and preview")
+    upload = st.file_uploader(
+        "CSV or Excel workbook",
+        type=("csv", "xlsx"),
+        accept_multiple_files=False,
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}upload",
+        help="The uploaded file is held only for this transient preview/apply workflow.",
+    )
+    preview_state = st.session_state.get(_PARTICIPANT_IMPORT_PREVIEW_KEY)
+    current_preview = (
+        preview_state
+        if isinstance(preview_state, ParticipantSubmissionImportPreview)
+        else None
+    )
+    conflict_rows = (
+        tuple(
+            row.row_number
+            for row in current_preview.rows
+            if row.status
+            in {ImportRowStatus.SKIPPED_CONFLICT, ImportRowStatus.PLANNED_REPLACEMENT}
+        )
+        if current_preview is not None
+        and current_preview.session_id == selected_id
+        else ()
+    )
+    selected_replacement_rows = (
+        tuple(
+            row.row_number
+            for row in current_preview.rows
+            if row.status == ImportRowStatus.PLANNED_REPLACEMENT
+        )
+        if current_preview is not None
+        else ()
+    )
+    replace_rows = frozenset(
+        st.multiselect(
+            "Replace existing submission (selected rows)",
+            options=conflict_rows,
+            default=selected_replacement_rows if conflict_rows else (),
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}replace_rows",
+            help="A replacement creates a new attempt and preserves prior evidence.",
+        )
+    )
+    preview_clicked = st.button(
+        "Preview import" if current_preview is None else "Update preview plan",
+        type="primary",
+        disabled=upload is None,
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}preview_button",
+    )
+    if preview_clicked and upload is not None:
+        try:
+            content = upload.getvalue()
+            generated_preview = context.container.participant_imports.preview.execute(
+                PreviewParticipantSubmissionImportCommand(
+                    session_id=selected_id,
+                    filename=upload.name,
+                    content=content,
+                    replace_row_numbers=replace_rows,
+                )
+            )
+        except ParticipantSubmissionImportError as error:
+            st.error(str(error), icon=":material/error:")
+        except Exception:  # noqa: BLE001 - uploaded values must not reach the page.
+            st.error(
+                "The file could not be previewed safely. Verify the template "
+                "and try again.",
+                icon=":material/error:",
+            )
+        else:
+            st.session_state[_PARTICIPANT_IMPORT_PREVIEW_KEY] = generated_preview
+            st.session_state[_PARTICIPANT_IMPORT_CONTENT_KEY] = content
+            st.session_state.pop(_PARTICIPANT_IMPORT_RESULT_KEY, None)
+            st.rerun()
+
+    preview_state = st.session_state.get(_PARTICIPANT_IMPORT_PREVIEW_KEY)
+    if not isinstance(preview_state, ParticipantSubmissionImportPreview):
+        return
+    preview = preview_state
+    if preview.session_id != selected_id:
+        return
+    summary = preview.summary
+    metrics = st.columns(5)
+    metrics[0].metric("Rows", summary.total_rows)
+    metrics[1].metric("New", summary.new_participants)
+    metrics[2].metric("Submitted", summary.submitted)
+    metrics[3].metric("Skipped", summary.skipped_conflicts)
+    metrics[4].metric("Blocking", summary.blocking_error_count)
+    status_filter = st.selectbox(
+        "Row status",
+        options=(None, *ImportRowStatus),
+        format_func=lambda value: (
+            "All rows" if value is None else value.value.replace("_", " ").title()
+        ),
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}status_filter",
+    )
+    visible_rows = tuple(
+        row for row in preview.rows
+        if status_filter is None or row.status == status_filter
+    )
+    st.dataframe(
+        [
+            {
+                "Row": row.row_number,
+                "Participant reference": row.participant_ref,
+                "Alias": row.participant_alias,
+                "Group": row.group_name or "—",
+                "State": row.record_state.value,
+                "Answers": row.answer_count,
+                "Status": row.status.value.replace("_", " ").title(),
+            }
+            for row in visible_rows
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    for row in visible_rows:
+        if row.issues:
+            with st.expander(f"Row {row.row_number} diagnostics ({len(row.issues)})"):
+                for issue in row.issues:
+                    st.write(
+                        f"{'Error' if issue.blocking else 'Warning'} · "
+                        f"`{issue.column}` · {issue.message}"
+                    )
+    if any(row.issues for row in preview.rows):
+        st.download_button(
+            "Download diagnostics",
+            data=preview.error_report_csv,
+            file_name="participant-import-diagnostics.csv",
+            mime="text/csv",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}diagnostics",
+        )
+
+    st.markdown("#### 4. Confirm and apply")
+    if preview.has_blocking_errors:
+        st.error("Resolve every blocking error and preview the file again.")
+        return
+    lifecycle_supported = scope.lifecycle_state in {
+        SessionStatus.DRAFT,
+        SessionStatus.OPEN,
+        SessionStatus.PAUSED,
+        SessionStatus.CLOSED,
+    }
+    if not lifecycle_supported:
+        st.error(
+            f"Sessions in {scope.lifecycle_state.value!r} state cannot be imported."
+        )
+    lifecycle_override = False
+    lifecycle_reason = None
+    if scope.lifecycle_state in {SessionStatus.PAUSED, SessionStatus.CLOSED}:
+        st.warning(
+            "This changes historical/session data in a paused or closed session "
+            "and will be recorded in the audit log."
+        )
+        lifecycle_override = st.checkbox(
+            "Override paused/closed session protection",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}lifecycle_override",
+        )
+        lifecycle_reason = st.text_input(
+            "Lifecycle override reason",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}lifecycle_reason",
+        )
+    resub_override = False
+    resub_reason = None
+    if summary.planned_replacements and not scope.allow_resubmissions:
+        resub_override = st.checkbox(
+            "Override resubmission policy",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}resub_override",
+        )
+        resub_reason = st.text_input(
+            "Resubmission override reason",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}resub_reason",
+        )
+    identity_attested = False
+    identity_basis = None
+    if summary.identity_rows:
+        identity_attested = st.checkbox(
+            "I confirm authorization to store the imported identity data",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}identity_attestation",
+        )
+        identity_basis = st.text_input(
+            "Identity processing basis",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}identity_basis",
+        )
+        st.caption(
+            "This administrator attestation is not participant questionnaire consent."
+        )
+    confirmed = st.checkbox(
+        f"Confirm: create {summary.new_participants}, submit {summary.submitted}, "
+        f"draft {summary.drafts}, replace {summary.planned_replacements}, "
+        f"skip {summary.skipped_conflicts}",
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}confirmed",
+    )
+    actor_id = context.principal.subject
+    apply_disabled = (
+        not confirmed
+        or not lifecycle_supported
+        or actor_id is None
+        or (scope.lifecycle_state in {SessionStatus.PAUSED, SessionStatus.CLOSED} and (not lifecycle_override or not (lifecycle_reason or "").strip()))
+        or (summary.planned_replacements and not scope.allow_resubmissions and (not resub_override or not (resub_reason or "").strip()))
+        or (summary.identity_rows > 0 and (not identity_attested or not (identity_basis or "").strip()))
+    )
+    if st.button(
+        "Confirm and apply",
+        type="primary",
+        disabled=apply_disabled,
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}apply",
+    ):
+        transient_content = st.session_state.get(_PARTICIPANT_IMPORT_CONTENT_KEY)
+        if not isinstance(transient_content, bytes):
+            st.error("The transient upload expired. Upload and preview again.")
+        else:
+            try:
+                with st.spinner("Applying the import atomically…"):
+                    result = context.container.participant_imports.apply.execute(
+                        ApplyParticipantSubmissionImportCommand(
+                            session_id=selected_id,
+                            filename=preview.filename,
+                            content=transient_content,
+                            expected_file_hash=preview.file_hash,
+                            expected_plan_hash=preview.plan_hash,
+                            actor_id=actor_id or "",
+                            actor_roles=context.principal.roles,
+                            replace_row_numbers=replace_rows,
+                            lifecycle_override=lifecycle_override,
+                            lifecycle_override_reason=lifecycle_reason,
+                            resubmission_override=resub_override,
+                            resubmission_override_reason=resub_reason,
+                            identity_processing_attested=identity_attested,
+                            identity_processing_basis=identity_basis,
+                        )
+                    )
+            except ParticipantSubmissionImportError as error:
+                st.error(str(error), icon=":material/error:")
+            except Exception:  # noqa: BLE001 - uploaded values must not reach the page.
+                st.error(
+                    "The import could not be applied safely. No rows were committed.",
+                    icon=":material/error:",
+                )
+            else:
+                st.session_state[_PARTICIPANT_IMPORT_RESULT_KEY] = result
+                st.session_state.pop(_PARTICIPANT_IMPORT_CONTENT_KEY, None)
+                st.session_state.pop(_PARTICIPANT_IMPORT_PREVIEW_KEY, None)
+                st.session_state.pop(
+                    f"{_PARTICIPANT_IMPORT_PREFIX}upload", None
+                )
+                st.rerun()
+
+def _render_participant_import_result(context: PageContext, scope: Any, result: Any) -> None:
+    st.success(
+        f"Import applied: {result.created_participant_count} participants, "
+        f"{result.submitted_count} submissions, {result.replaced_count} replacements."
+    )
+    st.download_button(
+        "Download import result",
+        data=result.result_report_csv,
+        file_name="participant-import-result.csv",
+        mime="text/csv",
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}result_download",
+    )
+    eligible_ids = tuple(
+        row.participant_id
+        for row in result.rows
+        if row.participant_id is not None and row.status != "skipped_conflict"
+    )
+    if eligible_ids and st.checkbox(
+        "Generate resume links (optional separate action)",
+        key=f"{_PARTICIPANT_IMPORT_PREFIX}resume_option",
+    ):
+        st.warning(
+            "Plaintext links are shown once. They may not be usable until the session is open."
+        )
+        confirmed = st.checkbox(
+            "Confirm resume-link generation",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}resume_confirm",
+        )
+        if st.button(
+            "Generate resume links",
+            disabled=not confirmed,
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}resume_generate",
+        ):
+            try:
+                generated_credentials = context.container.participant_imports.generate_resume_links.execute(
+                    GenerateImportedResumeLinksCommand(
+                        session_id=scope.session_id,
+                        participant_ids=eligible_ids,
+                        actor_id=context.principal.subject or "",
+                        actor_roles=context.principal.roles,
+                        confirmed=confirmed,
+                    )
+                )
+            except ParticipantSubmissionImportError as error:
+                st.error(str(error))
+            except Exception:  # noqa: BLE001 - credentials must not reach the page.
+                st.error("Resume links could not be generated safely.")
+            else:
+                st.session_state[_PARTICIPANT_IMPORT_CREDENTIALS_KEY] = (
+                    generated_credentials
+                )
+                st.rerun()
+    credentials_state = st.session_state.get(_PARTICIPANT_IMPORT_CREDENTIALS_KEY)
+    if isinstance(credentials_state, GenerateImportedResumeLinksResult):
+        credentials = credentials_state
+        output = io.StringIO(newline="")
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerow(("participant_alias", "resume_url", "expires_at"))
+        for item in credentials.credentials:
+            alias = item.participant_alias
+            if alias.startswith(("=", "+", "-", "@")):
+                alias = "'" + alias
+            writer.writerow((
+                alias,
+                private_resume_url(
+                    context.container.settings.public_base_url,
+                    session_slug=credentials.session_slug,
+                    access_token=item.access_token,
+                ),
+                item.expires_at.isoformat(),
+            ))
+        st.download_button(
+            "Download one-time resume links",
+            data=output.getvalue().encode("utf-8"),
+            file_name="participant-resume-links.csv",
+            mime="text/csv",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}credentials_download",
+        )
+        if st.button(
+            "I saved the links — clear plaintext credentials",
+            key=f"{_PARTICIPANT_IMPORT_PREFIX}credentials_clear",
+        ):
+            st.session_state.pop(_PARTICIPANT_IMPORT_CREDENTIALS_KEY, None)
+            st.rerun()
+    if st.button("Clear import workflow", key=f"{_PARTICIPANT_IMPORT_PREFIX}clear"):
+        _clear_participant_import_state()
+        st.rerun()
+
+
+def _clear_participant_import_state() -> None:
+    for key in tuple(st.session_state):
+        if str(key).startswith(_PARTICIPANT_IMPORT_PREFIX):
+            st.session_state.pop(key, None)
 
 
 def _render_sessions(context: PageContext) -> None:
@@ -201,6 +695,8 @@ def _render_sessions(context: PageContext) -> None:
         _render_create_session_dialog(context)
     if st.session_state.get(_CONFIG_DIALOG_KEY, False):
         _render_configuration_dialog(context)
+    if st.session_state.get(_ACCESS_REPLACE_DIALOG_KEY, False):
+        _render_replace_participant_access_dialog(context)
 
     selected_session_id = st.session_state.get(_SESSION_SELECTED_KEY)
     if selected_session_id:
@@ -1754,6 +2250,11 @@ def _render_session_invitations(
     context: PageContext,
     detail: AdminSessionDetail,
 ) -> None:
+    if isinstance(
+        st.session_state.get(_INVITATION_RESULT_KEY),
+        IssuedInvitationResult,
+    ):
+        _render_issued_invitation_dialog(context, detail)
     st.markdown("#### Invitation management")
     st.caption(
         "Credentials are shown only when issued. Resending securely replaces the "
@@ -1804,7 +2305,6 @@ def _render_session_invitations(
             )
             st.rerun()
 
-    _render_issued_credentials(detail)
     filters = st.columns([0.55, 0.25, 0.2])
     with filters[0]:
         search = st.text_input(
@@ -1930,30 +2430,70 @@ def _render_issue_invitation_form(
         st.error(str(error), icon=":material/error:")
     else:
         st.session_state[_INVITATION_RESULT_KEY] = result
-        st.success("Invitation issued. Copy the credential before leaving this page.")
+        st.rerun()
 
 
-def _render_issued_credentials(detail: AdminSessionDetail) -> None:
+@st.dialog("Save the private invitation link", width="large", dismissible=False)
+def _render_issued_invitation_dialog(
+    context: PageContext,
+    detail: AdminSessionDetail,
+) -> None:
     result = st.session_state.get(_INVITATION_RESULT_KEY)
     if not isinstance(result, IssuedInvitationResult):
+        st.error("The one-time invitation credential is no longer available.")
         return
-    with st.container(border=True):
-        st.markdown("##### One-time invitation credential")
-        st.warning(
-            "This token is not stored in recoverable form. Copy or download it now."
+    invitation_url = private_invitation_url(
+        context.container.settings.public_base_url,
+        session_slug=detail.summary.public_slug,
+        invitation_token=result.token,
+    )
+    st.warning(
+        "This private invitation is shown only once. Copy or download it before "
+        "continuing; the token is not stored in recoverable form.",
+        icon=":material/key:",
+    )
+    st.markdown("**Complete invitation URL**")
+    st.code(invitation_url, language=None, wrap_lines=True)
+    st.caption(
+        "Expires "
+        + format_datetime(
+            result.expires_at,
+            timezone_name=context.container.settings.app_timezone,
         )
+    )
+    download_lines = [
+        "Poli Insight private invitation",
+        "",
+        invitation_url,
+        "",
+        f"Expires: {result.expires_at.isoformat()}",
+    ]
+    if result.access_code is not None:
+        st.markdown("**Access code**")
         st.code(
-            f"?session={detail.summary.public_slug}&invitation={result.token}",
+            result.access_code,
             language=None,
         )
-        if result.access_code is not None:
-            st.markdown(f"**Access code:** `{result.access_code}`")
-        if st.button(
-            "Clear credential",
-            key=f"invitation:clear:{result.invitation_id}",
-        ):
-            st.session_state.pop(_INVITATION_RESULT_KEY, None)
-            st.rerun()
+        download_lines.extend(("", f"Access code: {result.access_code}"))
+    st.download_button(
+        "Download invitation details",
+        data="\n".join(download_lines) + "\n",
+        file_name="poli-insight-private-invitation.txt",
+        mime="text/plain",
+        key=f"invitation:issued:download:{result.invitation_id}",
+    )
+    acknowledged = st.checkbox(
+        "I have saved the complete invitation link privately.",
+        key=f"invitation:issued:acknowledged:{result.invitation_id}",
+    )
+    if st.button(
+        "Done",
+        type="primary",
+        disabled=not acknowledged,
+        key=f"invitation:issued:done:{result.invitation_id}",
+    ):
+        st.session_state.pop(_INVITATION_RESULT_KEY, None)
+        st.rerun()
 
 
 def _render_invitation_actions(
@@ -2120,7 +2660,11 @@ def _render_invitation_import(
     if isinstance(import_result, ApplyInvitationImportResult):
         st.download_button(
             "Download issued credentials",
-            data=_invitation_credentials_csv(import_result, detail.summary.public_slug),
+            data=_invitation_credentials_csv(
+                import_result,
+                context.container.settings.public_base_url,
+                detail.summary.public_slug,
+            ),
             file_name=f"{detail.summary.public_slug}-invitation-credentials.csv",
             mime="text/csv",
             key=f"invitation:import:download:{import_result.batch_id}",
@@ -2134,6 +2678,29 @@ def _render_session_participants(
 ) -> None:
     st.markdown("#### Participants")
     st.caption("Analytical labels are shown without decrypted identity data.")
+    try:
+        participant_metrics = context.queries.get_session_participant_metrics(
+            detail.summary.session_id
+        )
+    except PageQueryError as error:
+        st.error(str(error), icon=":material/error:")
+        return
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Enrolled", participant_metrics.total_enrolled)
+    metric_columns[1].metric("Never started", participant_metrics.never_started)
+    metric_columns[2].metric("Active drafts", participant_metrics.active_drafts)
+    metric_columns[3].metric(
+        "Completion rate",
+        f"{participant_metrics.completion_rate:.0f}%",
+    )
+    if participant_metrics.stale_drafts:
+        st.warning(
+            f"{participant_metrics.stale_drafts} draft(s) have not been saved in 7 days."
+        )
+    if participant_metrics.resume_links_expiring_soon:
+        st.warning(
+            f"{participant_metrics.resume_links_expiring_soon} resume link(s) expire within 7 days."
+        )
     filters = st.columns([0.4, 0.2, 0.2, 0.2])
     search = filters[0].text_input(
         "Search participants",
@@ -2196,6 +2763,10 @@ def _render_session_participants(
                 "Group": item.group_name,
                 "Access": item.access_status.value.title(),
                 "Progress": item.progress,
+                "Answers": item.answer_progress,
+                "Attempt": item.current_attempt or "—",
+                "Last activity": item.last_activity_at,
+                "Resume access": item.resume_access_status.replace("_", " ").title(),
                 "Enrolled": item.enrolled_at,
             }
             for item in result.items
@@ -2207,6 +2778,9 @@ def _render_session_participants(
         key=f"participants:table:{detail.summary.session_id}:{page}",
         column_config={
             "ID": None,
+            "Last activity": st.column_config.DatetimeColumn(
+                format="MMM D, YYYY, h:mm a"
+            ),
             "Enrolled": st.column_config.DatetimeColumn(format="MMM D, YYYY, h:mm a"),
         },
     )
@@ -2219,22 +2793,211 @@ def _render_session_participants(
             selected.participant_id,
         )
         if participant is not None:
-            with st.container(border=True):
-                st.markdown(f"##### {participant.summary.display_label}")
-                metrics = st.columns(4)
-                metrics[0].metric("Progress", participant.summary.progress)
-                metrics[1].metric("Submissions", participant.submission_count)
-                metrics[2].metric("Configuration", participant.configuration_version)
-                metrics[3].metric(
-                    "Access", participant.summary.access_status.value.title()
+            _render_participant_detail(context, detail, participant)
+
+
+def _render_participant_detail(
+    context: PageContext,
+    session: AdminSessionDetail,
+    participant: Any,
+) -> None:
+    with st.container(border=True):
+        st.markdown(f"##### {participant.summary.display_label}")
+        tabs = st.tabs(
+            ("Overview", "Timeline", "Draft progress", "Attempts", "Resume access", "Consent")
+        )
+        with tabs[0]:
+            st.dataframe(
+                [
+                    {"Field": "Participant", "Value": participant.summary.display_label},
+                    {"Field": "Participant ID", "Value": participant.summary.participant_id},
+                    {"Field": "Group", "Value": participant.summary.group_name},
+                    {"Field": "Configuration version", "Value": participant.configuration_version},
+                    {"Field": "Enrollment source", "Value": participant.invitation_id or "Direct enrollment"},
+                    {"Field": "Overall progress", "Value": participant.summary.progress},
+                ],
+                hide_index=True,
+                width="stretch",
+            )
+        with tabs[1]:
+            timeline = (
+                ("Enrolled", participant.summary.enrolled_at),
+                ("Joined", participant.joined_at),
+                ("Started", participant.started_at),
+                ("Last draft save", None if participant.draft is None else participant.draft.last_saved_at),
+                ("Submitted", participant.submitted_at),
+                ("Completed", participant.completed_at),
+                ("Last updated", participant.updated_at),
+            )
+            st.dataframe(
+                [{"Milestone": label, "Time": value} for label, value in timeline],
+                hide_index=True,
+                width="stretch",
+                column_config={"Time": st.column_config.DatetimeColumn(format="MMM D, YYYY, h:mm a")},
+            )
+        with tabs[2]:
+            if participant.draft is None:
+                st.info("Enrolled but never saved: no draft exists for this participant.")
+            else:
+                draft = participant.draft
+                st.progress(
+                    draft.completion_percentage / 100,
+                    text=(
+                        f"{draft.answered_count} of {draft.required_answer_count} required "
+                        f"answers ({draft.completion_percentage:.0f}%)"
+                    ),
                 )
-                st.caption(
-                    "Last updated "
-                    + format_datetime(
-                        participant.updated_at,
-                        timezone_name=context.container.settings.app_timezone,
-                    )
+                st.dataframe(
+                    [{
+                        "Draft ID": draft.submission_id,
+                        "Attempt": draft.attempt_number,
+                        "Last saved": draft.last_saved_at,
+                    }],
+                    hide_index=True,
+                    width="stretch",
                 )
+        with tabs[3]:
+            if not participant.attempts:
+                st.info("No submission attempts exist.")
+            else:
+                st.dataframe(
+                    [{
+                        "Attempt": item.attempt_number,
+                        "Status": item.status.value.replace("_", " ").title(),
+                        "Submitted": item.submitted_at,
+                        "Validation": _validation_label(item.validation_status),
+                        "Review": item.review_status.value.replace("_", " ").title(),
+                        "Predecessor": item.previous_submission_id or "—",
+                    } for item in participant.attempts],
+                    hide_index=True,
+                    width="stretch",
+                )
+        with tabs[4]:
+            one_time = st.session_state.get(_NEW_RESUME_LINK_KEY)
+            if (
+                isinstance(one_time, _OneTimeResumeLink)
+                and one_time.participant_id == participant.summary.participant_id
+            ):
+                st.success("New private resume link generated. This is the only display.")
+                st.code(one_time.resume_url, language=None, wrap_lines=True)
+                st.download_button(
+                    "Download new link",
+                    data=(f"{one_time.resume_url}\nExpires: {one_time.expires_at.isoformat()}\n"),
+                    file_name="poli-insight-replacement-resume-link.txt",
+                    mime="text/plain",
+                    key=f"participant_access:download:{participant.summary.participant_id}",
+                )
+                if st.button(
+                    "I saved the new link",
+                    key=f"participant_access:clear:{participant.summary.participant_id}",
+                ):
+                    st.session_state.pop(_NEW_RESUME_LINK_KEY, None)
+                    st.rerun()
+            access = participant.access
+            if access is None:
+                st.warning("No access grant exists. Replacement is unavailable.")
+            else:
+                remaining = access.expires_at - datetime.now(tz=UTC)
+                if access.status != "active":
+                    st.warning(f"Resume access is {access.status}.")
+                elif remaining <= timedelta(days=3):
+                    st.warning("Resume access expires soon.")
+                st.dataframe(
+                    [{
+                        "Status": access.status.replace("_", " ").title(),
+                        "Issued": access.issued_at,
+                        "Expires": access.expires_at,
+                        "Last used": access.last_used_at,
+                        "Time remaining": str(max(remaining, timedelta(0))).split(".")[0],
+                        "Replacement exists": "Yes" if access.has_replacement else "No",
+                    }],
+                    hide_index=True,
+                    width="stretch",
+                )
+                if st.button(
+                    "Generate replacement resume link",
+                    disabled=access.status != "active",
+                    key=f"participant_access:begin:{participant.summary.participant_id}",
+                ):
+                    st.session_state[_ACCESS_REPLACE_DIALOG_KEY] = {
+                        "session_id": session.summary.session_id,
+                        "public_slug": session.summary.public_slug,
+                        "participant_id": participant.summary.participant_id,
+                        "participant_label": participant.summary.display_label,
+                    }
+                    st.rerun()
+        with tabs[5]:
+            consent = participant.consent
+            if consent.required and not consent.completed:
+                st.warning("Required consent has not been completed.")
+            st.dataframe(
+                [{
+                    "Required": "Yes" if consent.required else "No",
+                    "Complete": "Yes" if consent.completed else "No",
+                    "Version": consent.consent_version,
+                    "Accepted": consent.accepted_at,
+                }],
+                hide_index=True,
+                width="stretch",
+            )
+
+
+def _dismiss_replace_participant_access_dialog() -> None:
+    st.session_state.pop(_ACCESS_REPLACE_DIALOG_KEY, None)
+
+
+@st.dialog(
+    "Generate replacement resume link",
+    width="large",
+    on_dismiss=_dismiss_replace_participant_access_dialog,
+)
+def _render_replace_participant_access_dialog(context: PageContext) -> None:
+    state = st.session_state.get(_ACCESS_REPLACE_DIALOG_KEY)
+    if not isinstance(state, dict):
+        st.error("The replacement workflow is no longer available.")
+        return
+    st.warning(
+        "Generating a replacement immediately invalidates the participant's old link. "
+        "Their group, configuration, draft, and submissions are unchanged."
+    )
+    confirmed = st.checkbox(
+        f"Invalidate the old link for {state.get('participant_label', 'this participant')}",
+        key="participant_access:replace:confirmed",
+    )
+    if st.button(
+        "Generate and invalidate old link",
+        type="primary",
+        disabled=not confirmed,
+        key="participant_access:replace:submit",
+    ):
+        actor_id = context.principal.subject
+        if actor_id is None:
+            st.error("Your administrator session has expired.")
+            return
+        try:
+            result = context.container.operations.replace_participant_access.execute(
+                ReplaceParticipantAccessGrantCommand(
+                    session_id=str(state["session_id"]),
+                    participant_id=str(state["participant_id"]),
+                    actor_id=actor_id,
+                    actor_roles=context.principal.roles,
+                )
+            )
+        except (ReplaceParticipantAccessGrantError, KeyError):
+            st.error("The resume link could not be replaced. Refresh and try again.")
+            return
+        st.session_state[_NEW_RESUME_LINK_KEY] = _OneTimeResumeLink(
+            participant_id=result.participant_id,
+            resume_url=private_resume_url(
+                context.container.settings.public_base_url,
+                session_slug=str(state["public_slug"]),
+                access_token=result.access_token,
+            ),
+            expires_at=result.expires_at,
+        )
+        st.session_state.pop(_ACCESS_REPLACE_DIALOG_KEY, None)
+        st.session_state.pop("participant_access:replace:confirmed", None)
+        st.rerun()
 
 
 def _render_session_submissions(
@@ -2433,28 +3196,280 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
         st.markdown(
             f"##### {submission.summary.participant_label} · attempt {submission.summary.attempt_number}"
         )
-        metrics = st.columns(4)
-        metrics[0].metric("Answers", submission.answer_count)
-        metrics[1].metric("Required", submission.required_answer_count)
-        metrics[2].metric(
-            "Validation", _validation_label(submission.summary.validation_status)
-        )
-        metrics[3].metric(
-            "Review", submission.review_status.value.replace("_", " ").title()
-        )
-        if submission.validation_messages:
-            st.markdown("**Validation findings**")
-            for message in submission.validation_messages:
-                st.warning(message)
-        if submission.review_notes:
-            st.markdown(f"**Reviewer notes:** {submission.review_notes}")
-        st.caption(
-            "Last saved "
-            + format_datetime(
-                submission.last_saved_at,
-                timezone_name=context.container.settings.app_timezone,
+        tabs = st.tabs(("Overview", "Responses", "Matrix / weights", "Validation", "Integrity / audit"))
+        completion = (
+            100.0
+            if submission.required_answer_count == 0
+            else min(
+                100.0,
+                submission.answer_count / submission.required_answer_count * 100,
             )
         )
+        response_rows = _submission_response_rows(submission)
+        matrix_rows, matrix_note = _submission_matrix_rows(submission)
+        with tabs[0]:
+            metrics = st.columns(3)
+            metrics[0].metric("Progress", f"{completion:.0f}%")
+            metrics[1].metric("Answers", f"{submission.answer_count} / {submission.required_answer_count}")
+            metrics[2].metric("Attempt", submission.summary.attempt_number)
+            st.dataframe(
+                [{
+                    "Participant": submission.summary.participant_label,
+                    "Group": submission.summary.group_name,
+                    "Status": submission.summary.status.value.replace("_", " ").title(),
+                    "Started": submission.started_at,
+                    "Last saved": submission.last_saved_at,
+                    "Submitted": submission.submitted_at,
+                    "Validation": _validation_label(submission.summary.validation_status),
+                    "Review": submission.review_status.value.replace("_", " ").title(),
+                }],
+                hide_index=True,
+                width="stretch",
+            )
+            if submission.answer_count < submission.required_answer_count:
+                st.warning("This attempt has incomplete required responses.")
+            if submission.summary.status == SubmissionStatus.SUPERSEDED:
+                st.info("This attempt has been superseded by a later submission.")
+        with tabs[1]:
+            if not response_rows:
+                st.info("No authored responses have been saved.")
+            else:
+                st.caption("Authored values are shown separately from validator-derived values.")
+                st.dataframe(response_rows, hide_index=True, width="stretch")
+                with st.expander("Raw authored JSON"):
+                    st.json(
+                        [
+                            {
+                                "question_id": item.question_definition_id,
+                                "raw_value": dict(item.raw_value),
+                            }
+                            for item in submission.authored_answers
+                        ]
+                    )
+                st.download_button(
+                    "Download authored responses CSV",
+                    data=_rows_csv(response_rows),
+                    file_name=f"submission-{submission.summary.attempt_number}-responses.csv",
+                    mime="text/csv",
+                    key=f"submission:responses:csv:{submission.summary.submission_id}",
+                )
+        with tabs[2]:
+            st.caption(matrix_note)
+            if matrix_rows:
+                st.dataframe(matrix_rows, hide_index=True, width="stretch")
+                st.download_button(
+                    "Download displayed matrix / weights CSV",
+                    data=_rows_csv(matrix_rows),
+                    file_name=f"submission-{submission.summary.attempt_number}-matrix.csv",
+                    mime="text/csv",
+                    key=f"submission:matrix:csv:{submission.summary.submission_id}",
+                )
+                if submission.response_format == ResponseFormat.DIRECT_RATING:
+                    chart_values = {
+                        str(row["Criterion"]): float(str(row["Derived weight"]))
+                        for row in matrix_rows
+                        if row.get("Derived weight") not in {None, "—"}
+                    }
+                    if chart_values:
+                        st.bar_chart(chart_values, horizontal=True)
+            else:
+                st.info("Matrix not applicable for the available authored targets.")
+        with tabs[3]:
+            st.dataframe(
+                [{
+                    "Status": _validation_label(submission.summary.validation_status),
+                    "Completion ratio": submission.completion_ratio or "—",
+                    "Consistency ratio": submission.summary.consistency_ratio or "—",
+                    "Configured threshold": submission.consistency_threshold or "—",
+                    "Validator version": submission.validator_version or "—",
+                    "Completed": submission.validation_completed_at,
+                }],
+                hide_index=True,
+                width="stretch",
+            )
+            if (
+                submission.summary.consistency_ratio is not None
+                and submission.consistency_threshold is not None
+                and Decimal(submission.summary.consistency_ratio)
+                > Decimal(submission.consistency_threshold)
+            ):
+                st.warning("Consistency ratio exceeds the configured threshold.")
+            for message in submission.validation_messages:
+                st.warning(message)
+            if not submission.criterion_weights:
+                st.info("Derived criterion weights are unavailable until validation succeeds.")
+        with tabs[4]:
+            st.dataframe(
+                [{
+                    "Submission ID": submission.summary.submission_id,
+                    "Answer hash": submission.answers_hash or "Draft — not finalized",
+                    "Schema version": submission.answer_schema_version or "Draft",
+                    "Previous submission": submission.previous_submission_id or "—",
+                    "Superseded at": submission.superseded_at,
+                    "Withdrawn at": submission.withdrawn_at,
+                }],
+                hide_index=True,
+                width="stretch",
+            )
+            st.download_button(
+                "Download safe structured JSON",
+                data=_safe_submission_json(submission),
+                file_name=f"submission-{submission.summary.attempt_number}.json",
+                mime="application/json",
+                key=f"submission:json:{submission.summary.submission_id}",
+            )
+            if submission.review_notes:
+                st.markdown(f"**Reviewer notes:** {submission.review_notes}")
+
+
+def _submission_response_rows(submission: Any) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for answer in submission.authored_answers:
+        target = (
+            answer.criterion_label
+            or (
+                f"{answer.left_criterion_label} ↔ {answer.right_criterion_label}"
+                if answer.left_criterion_label and answer.right_criterion_label
+                else answer.alternative_label
+            )
+            or "—"
+        )
+        authored = (
+            answer.selected_scale_label
+            or answer.numeric_value
+            or (str(answer.rank_value) if answer.rank_value is not None else "—")
+        )
+        rows.append(
+            {
+                "Order": answer.display_order + 1,
+                "Question": answer.prompt,
+                "Target": target,
+                "Authored response": authored,
+                "Scale numeric value": answer.selected_scale_numeric_value or "—",
+                "Derived normalized value": answer.normalized_crisp_value or "—",
+                "Answered": answer.answered_at,
+                "Response time (ms)": answer.response_time_ms or "—",
+            }
+        )
+    return rows
+
+
+def _submission_matrix_rows(
+    submission: Any,
+) -> tuple[list[dict[str, object]], str]:
+    if submission.response_format == ResponseFormat.PAIRWISE:
+        labels: list[str] = []
+        for answer in submission.authored_answers:
+            for label in (answer.left_criterion_label, answer.right_criterion_label):
+                if label and label not in labels:
+                    labels.append(label)
+        values = {
+            (answer.left_criterion_label, answer.right_criterion_label): (
+                answer.normalized_crisp_value
+            )
+            for answer in submission.authored_answers
+            if answer.left_criterion_label and answer.right_criterion_label
+        }
+        rows = []
+        for left in labels:
+            matrix_row: dict[str, object] = {"Criterion": left}
+            for right in labels:
+                matrix_row[right] = "1" if left == right else values.get((left, right), "—") or "—"
+            rows.append(matrix_row)
+        note = (
+            "Criteria comparison matrix in frozen criterion order. Cells use validated "
+            "numeric interpretations; reciprocal cells remain blank because the read "
+            "model does not assert a reciprocity contract."
+        )
+        if not any(answer.normalized_crisp_value for answer in submission.authored_answers):
+            note = "Authored pairwise responses are available, but derived matrix values are unavailable until successful validation."
+        return rows, note
+    if submission.response_format == ResponseFormat.DIRECT_RATING:
+        weights = {item.criterion_id: item for item in submission.criterion_weights}
+        rows = []
+        for answer in submission.authored_answers:
+            if not answer.criterion_label:
+                continue
+            weight = weights.get(answer.criterion_id or "")
+            rows.append(
+                {
+                    "Criterion": answer.criterion_label,
+                    "Authored scale label": answer.selected_scale_label or "—",
+                    "Authored numeric value": answer.selected_scale_numeric_value or "—",
+                    "Derived normalized value": answer.normalized_crisp_value or "—",
+                    "Derived weight": (
+                        "—" if weight is None else weight.crisp_weight or (
+                            f"({weight.fuzzy_lower}, {weight.fuzzy_middle}, {weight.fuzzy_upper})"
+                        )
+                    ),
+                }
+            )
+        return rows, "Criterion rating and weight table; authored and derived columns are explicitly labeled."
+    return [], "This response format does not define a supported matrix for these question targets; use the authored responses table."
+
+
+def _rows_csv(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return ""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0]))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def _safe_submission_json(submission: Any) -> str:
+    payload = {
+        "schema_version": 1,
+        "submission": {
+            "submission_id": submission.summary.submission_id,
+            "participant_id": submission.participant_id,
+            "participant_label": submission.summary.participant_label,
+            "group": submission.summary.group_name,
+            "attempt": submission.summary.attempt_number,
+            "status": submission.summary.status.value,
+            "response_format": submission.response_format.value,
+            "answer_hash": submission.answers_hash,
+            "answer_schema_version": submission.answer_schema_version,
+            "previous_submission_id": submission.previous_submission_id,
+        },
+        "responses": [
+            {
+                "question_id": item.question_definition_id,
+                "display_order": item.display_order,
+                "prompt": item.prompt,
+                "selected_scale_label": item.selected_scale_label,
+                "raw_value": dict(item.raw_value),
+                "normalized_value": (
+                    None if item.normalized_value is None else dict(item.normalized_value)
+                ),
+                "normalizer_version": item.normalizer_version,
+            }
+            for item in submission.authored_answers
+        ],
+        "validation": {
+            "status": (
+                None
+                if submission.summary.validation_status is None
+                else submission.summary.validation_status.value
+            ),
+            "completion_ratio": submission.completion_ratio,
+            "consistency_ratio": submission.summary.consistency_ratio,
+            "consistency_threshold": submission.consistency_threshold,
+            "validator_version": submission.validator_version,
+            "findings": list(submission.validation_messages),
+            "criterion_weights": [
+                {
+                    "criterion_id": item.criterion_id,
+                    "criterion_label": item.criterion_label,
+                    "crisp_weight": item.crisp_weight,
+                    "fuzzy": [item.fuzzy_lower, item.fuzzy_middle, item.fuzzy_upper],
+                }
+                for item in submission.criterion_weights
+            ],
+        },
+    }
+    return json.dumps(payload, indent=2, default=str)
 
 
 def _render_review_form(
@@ -2581,6 +3596,7 @@ def _admin_datetime(
 
 def _invitation_credentials_csv(
     result: ApplyInvitationImportResult,
+    public_base_url: str,
     public_slug: str,
 ) -> bytes:
     output = io.StringIO(newline="")
@@ -2590,7 +3606,11 @@ def _invitation_credentials_csv(
         writer.writerow(
             (
                 item.reference,
-                f"?session={public_slug}&invitation={item.invitation.token}",
+                private_invitation_url(
+                    public_base_url,
+                    session_slug=public_slug,
+                    invitation_token=item.invitation.token,
+                ),
                 item.invitation.access_code or "",
                 item.invitation.expires_at.isoformat(),
             )

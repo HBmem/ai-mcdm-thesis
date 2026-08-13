@@ -13,6 +13,7 @@ from typing import Protocol
 from poli_insight.domain.participation import (
     Participant,
     ParticipantAccessGrant,
+    ParticipantIdentity,
     SessionInvitation,
 )
 
@@ -58,6 +59,24 @@ class ParticipantRepository(Protocol):
     ) -> Participant | None:
         """Find the participant created from a one-time invitation."""
         ...
+
+    def get_many(self, participant_ids: tuple[str, ...]) -> tuple[Participant, ...]:
+        """Bulk load analytical participants without optional identity."""
+        ...
+
+
+class ParticipantIdentityRepository(Protocol):
+    """Persistence for encrypted optional PII and retention redaction."""
+
+    def add(self, identity: ParticipantIdentity) -> None: ...
+
+    def get(self, participant_id: str) -> ParticipantIdentity | None: ...
+
+    def save(self, identity: ParticipantIdentity) -> None: ...
+
+    def list_expired(
+        self, *, at: datetime, limit: int
+    ) -> tuple[ParticipantIdentity, ...]: ...
 
 
 class SessionInvitationRepository(Protocol):
@@ -138,6 +157,15 @@ class ParticipantAccessGrantRepository(Protocol):
         token_digest: str,
     ) -> ParticipantAccessGrant | None:
         """Look up and lock a digest before recording use or rotation."""
+        ...
+
+    def get_current_for_participant_for_update(
+        self,
+        participant_id: str,
+        *,
+        at: datetime,
+    ) -> ParticipantAccessGrant | None:
+        """Load and lock the participant's sole currently active grant."""
         ...
 
     def save(self, access_grant: ParticipantAccessGrant) -> None:

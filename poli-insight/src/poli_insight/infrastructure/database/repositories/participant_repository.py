@@ -25,6 +25,7 @@ from poli_insight.domain.participation import (
     Participant,
     ParticipantAccessGrant,
     ParticipantConsent,
+    ParticipantIdentity,
     SessionInvitation,
 )
 from poli_insight.infrastructure.auth.access_codes import (
@@ -33,10 +34,13 @@ from poli_insight.infrastructure.auth.access_codes import (
 )
 from poli_insight.infrastructure.database.mappers.participation import (
     apply_participant_access_grant_state,
+    apply_participant_identity_state,
     apply_participant_state,
     apply_session_invitation_state,
     participant_access_grant_to_domain,
     participant_access_grant_to_row,
+    participant_identity_to_domain,
+    participant_identity_to_row,
     participant_to_domain,
     participant_to_row,
     session_invitation_to_domain,
@@ -46,6 +50,7 @@ from poli_insight.infrastructure.database.models.participation import (
     ParticipantAccessAttemptRow,
     ParticipantAccessGrantRow,
     ParticipantConsentRow,
+    ParticipantIdentityRow,
     ParticipantRow,
     SessionAccessCodeRow,
     SessionInvitationRow,
@@ -150,6 +155,16 @@ class SqlAlchemyParticipantRepository:
         row = self._database_session.execute(statement).scalar_one_or_none()
         return None if row is None else participant_to_domain(row)
 
+    def get_many(self, participant_ids: tuple[str, ...]) -> tuple[Participant, ...]:
+        if not participant_ids:
+            return ()
+        rows = self._database_session.scalars(
+            select(ParticipantRow).where(
+                ParticipantRow.participant_id.in_(participant_ids)
+            )
+        ).all()
+        return tuple(participant_to_domain(row) for row in rows)
+
     def _load_by_id(
         self,
         participant_id: str,
@@ -162,6 +177,46 @@ class SqlAlchemyParticipantRepository:
         if for_update and _uses_postgresql(self._database_session):
             statement = statement.with_for_update()
         return self._database_session.execute(statement).scalar_one_or_none()
+
+class SqlAlchemyParticipantIdentityRepository:
+    """Persist ciphertext separately from analytical participant queries."""
+
+    def __init__(self, database_session: DatabaseSession) -> None:
+        self._database_session = database_session
+
+    def add(self, identity: ParticipantIdentity) -> None:
+        self._database_session.add(participant_identity_to_row(identity))
+
+    def get(self, participant_id: str) -> ParticipantIdentity | None:
+        row = self._database_session.get(ParticipantIdentityRow, participant_id)
+        return None if row is None else participant_identity_to_domain(row)
+
+    def save(self, identity: ParticipantIdentity) -> None:
+        row = self._database_session.get(ParticipantIdentityRow, identity.participant_id)
+        if row is None:
+            raise ParticipantNotFoundError("Participant identity does not exist.")
+        apply_participant_identity_state(row, identity)
+        self._database_session.flush()
+
+    def list_expired(
+        self, *, at: datetime, limit: int
+    ) -> tuple[ParticipantIdentity, ...]:
+        statement = (
+            select(ParticipantIdentityRow)
+            .where(
+                ParticipantIdentityRow.redacted_at.is_(None),
+                ParticipantIdentityRow.retention_until <= at,
+            )
+            .order_by(ParticipantIdentityRow.retention_until)
+            .limit(limit)
+        )
+        if _uses_postgresql(self._database_session):
+            statement = statement.with_for_update(skip_locked=True)
+        return tuple(
+            participant_identity_to_domain(row)
+            for row in self._database_session.scalars(statement)
+        )
+
 
 class SqlAlchemySessionInvitationRepository:
     """Persist one-time invitation lifecycle state using token digests."""
@@ -285,6 +340,10 @@ class SqlAlchemyParticipantAccessGrantRepository:
         self._database_session.add(
             participant_access_grant_to_row(access_grant)
         )
+        # Replacement rows are referenced immediately by the revoked
+        # predecessor. Materialize the successor first while retaining the
+        # caller-owned transaction boundary.
+        self._database_session.flush()
 
     def get(
         self,
@@ -297,6 +356,42 @@ class SqlAlchemyParticipantAccessGrantRepository:
             None
             if row is None
             else participant_access_grant_to_domain(row)
+        )
+
+    def get_current_for_participant_for_update(
+        self,
+        participant_id: str,
+        *,
+        at: datetime,
+    ) -> ParticipantAccessGrant | None:
+        """Load and lock the current unrevoked, unexpired credential."""
+
+        statement = (
+            select(ParticipantAccessGrantRow)
+            .where(
+                ParticipantAccessGrantRow.participant_id == participant_id,
+                ParticipantAccessGrantRow.revoked_at.is_(None),
+                ParticipantAccessGrantRow.issued_at <= at,
+                ParticipantAccessGrantRow.expires_at > at,
+            )
+            .order_by(
+                ParticipantAccessGrantRow.issued_at.desc(),
+                ParticipantAccessGrantRow.access_grant_id.desc(),
+            )
+            .limit(2)
+        )
+        if _uses_postgresql(self._database_session):
+            statement = statement.with_for_update()
+        rows = tuple(self._database_session.scalars(statement))
+        if len(rows) > 1:
+            raise ValueError(
+                "Participant has multiple active access grants; replacement "
+                "cannot proceed safely."
+            )
+        return (
+            None
+            if not rows
+            else participant_access_grant_to_domain(rows[0])
         )
 
     def get_for_update(

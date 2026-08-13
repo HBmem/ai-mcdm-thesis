@@ -18,6 +18,7 @@ from poli_insight.domain.participation import (
     ParticipantConsent,
     ParticipationRuleViolation,
 )
+from poli_insight.domain.session import SessionConfigurationVersion
 from poli_insight.infrastructure.auth.tokens import TokenError, digest_token
 
 
@@ -162,12 +163,12 @@ def authorize_participant_access(
 
 
 def require_consent(
-    unit_of_work: UnitOfWork, participant: Participant, configuration: object
+    unit_of_work: UnitOfWork,
+    participant: Participant,
+    configuration: SessionConfigurationVersion,
 ) -> None:
-    from poli_insight.domain.session import SessionConfigurationVersion
+    """Require the consent attached to a validated configuration contract."""
 
-    if not isinstance(configuration, SessionConfigurationVersion):
-        raise ParticipantAccessError("The questionnaire configuration is unavailable.")
     policy = consent_policy(configuration)
     if not policy.required:
         return

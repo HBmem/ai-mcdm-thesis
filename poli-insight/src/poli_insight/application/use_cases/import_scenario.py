@@ -962,10 +962,17 @@ def _prepare_snapshot_content(
         if isinstance(raw_stakeholder_groups, list)
         else []
     )
+    raw_tags = documents.scenario.get("tags", [])
+    tags = (
+        [tag for tag in raw_tags if isinstance(tag, str)]
+        if isinstance(raw_tags, list)
+        else []
+    )
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "scenario_key": documents.scenario["scenario_id"],
         "declared_version": documents.scenario["scenario_version"],
+        "tags": tags,
         "components": components,
         "materialized_input": {
             "schema_version": 1,

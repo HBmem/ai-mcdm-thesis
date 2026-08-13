@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import fields
 from datetime import UTC, datetime
 
 from poli_insight.application.queries.page_queries import (
     AdminDashboardSnapshot,
     PageResult,
+    ParticipantAccessSummary,
     ScenarioLibraryMetrics,
     SessionCatalogMetrics,
 )
@@ -60,6 +62,15 @@ class SessionCatalogMetricsTests(unittest.TestCase):
                 open_count=0,
                 attention_count=-1,
             )
+
+
+class CredentialProjectionTests(unittest.TestCase):
+    def test_participant_access_summary_cannot_expose_token_material(self) -> None:
+        field_names = {field.name for field in fields(ParticipantAccessSummary)}
+
+        self.assertNotIn("token", field_names)
+        self.assertNotIn("access_token", field_names)
+        self.assertNotIn("token_digest", field_names)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import streamlit as st
 
 from poli_insight.bootstrap import ApplicationContainer, create_container
@@ -12,15 +14,32 @@ st.set_page_config(
 )
 
 
-@st.cache_resource(show_spinner=False)
-def _create_application_container() -> ApplicationContainer:
-    """Build process-level infrastructure once across Streamlit reruns."""
+def _application_code_version() -> tuple[tuple[str, int, int], ...]:
+    """Fingerprint application modules that Streamlit may hot-reload."""
 
+    source_root = Path(__file__).resolve().parent / "src" / "poli_insight"
+    return tuple(
+        (
+            str(path.relative_to(source_root)),
+            path.stat().st_mtime_ns,
+            path.stat().st_size,
+        )
+        for path in sorted(source_root.rglob("*.py"))
+    )
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def _create_application_container(
+    code_version: tuple[tuple[str, int, int], ...],
+) -> ApplicationContainer:
+    """Build infrastructure once for each coherent application-code version."""
+
+    del code_version
     return create_container()
 
 
 try:
-    container = _create_application_container()
+    container = _create_application_container(_application_code_version())
 except Exception:  # noqa: BLE001 - final startup boundary
     render_startup_error()
     st.stop()

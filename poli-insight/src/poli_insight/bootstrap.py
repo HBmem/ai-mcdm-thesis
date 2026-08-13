@@ -39,6 +39,17 @@ from poli_insight.application.use_cases.participant_access import (
     CaptureParticipantConsent,
     ResumeParticipant,
 )
+from poli_insight.application.use_cases.participant_submission_import import (
+    ApplyParticipantSubmissionImport,
+    GenerateImportedResumeLinks,
+    GenerateParticipantImportTemplate,
+    GetParticipantImportSession,
+    PreviewParticipantSubmissionImport,
+    RedactExpiredImportedIdentity,
+)
+from poli_insight.application.use_cases.replace_participant_access_grant import (
+    ReplaceParticipantAccessGrant,
+)
 from poli_insight.application.use_cases.review_submission import ReviewSubmission
 from poli_insight.application.use_cases.save_submission_draft import (
     SaveSubmissionDraft,
@@ -58,6 +69,9 @@ from poli_insight.infrastructure.scenarios.bundled_source import (
 )
 from poli_insight.infrastructure.scenarios.subprocess_function_runner import (
     BundledScenarioSubprocessRunner,
+)
+from poli_insight.infrastructure.security.identity_protection import (
+    AesGcmIdentityProtector,
 )
 
 
@@ -99,6 +113,17 @@ class InvitationUseCases:
 class OperationalUseCases:
     invitations: InvitationUseCases
     review_submission: ReviewSubmission
+    replace_participant_access: ReplaceParticipantAccessGrant
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantImportUseCases:
+    get_session: GetParticipantImportSession
+    generate_template: GenerateParticipantImportTemplate
+    preview: PreviewParticipantSubmissionImport
+    apply: ApplyParticipantSubmissionImport
+    redact_expired_identity: RedactExpiredImportedIdentity
+    generate_resume_links: GenerateImportedResumeLinks
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +136,7 @@ class ApplicationContainer:
     submissions: SubmissionUseCases
     participation: ParticipationUseCases
     operations: OperationalUseCases
+    participant_imports: ParticipantImportUseCases
 
 
 def create_container(
@@ -137,6 +163,10 @@ def create_container(
             scenario_paths.source_root,
             scenario_paths.template_directory,
         ),
+    )
+    identity_protector = AesGcmIdentityProtector(
+        hmac_secret=resolved_settings.participant_import_hmac_secret,
+        encryption_secret=resolved_settings.participant_identity_encryption_key,
     )
 
     return ApplicationContainer(
@@ -184,5 +214,35 @@ def create_container(
                 apply_import=ApplyInvitationImport(unit_of_work_factory),
             ),
             review_submission=ReviewSubmission(unit_of_work_factory),
+            replace_participant_access=ReplaceParticipantAccessGrant(
+                unit_of_work_factory
+            ),
+        ),
+        participant_imports=ParticipantImportUseCases(
+            get_session=GetParticipantImportSession(unit_of_work_factory),
+            generate_template=GenerateParticipantImportTemplate(
+                unit_of_work_factory
+            ),
+            preview=PreviewParticipantSubmissionImport(
+                unit_of_work_factory,
+                identity_protector,
+                max_bytes=resolved_settings.participant_import_max_bytes,
+                max_rows=resolved_settings.participant_import_max_rows,
+            ),
+            apply=ApplyParticipantSubmissionImport(
+                unit_of_work_factory,
+                identity_protector,
+                max_bytes=resolved_settings.participant_import_max_bytes,
+                max_rows=resolved_settings.participant_import_max_rows,
+                identity_retention_days=(
+                    resolved_settings.imported_identity_retention_days
+                ),
+            ),
+            redact_expired_identity=RedactExpiredImportedIdentity(
+                unit_of_work_factory
+            ),
+            generate_resume_links=GenerateImportedResumeLinks(
+                unit_of_work_factory
+            ),
         ),
     )

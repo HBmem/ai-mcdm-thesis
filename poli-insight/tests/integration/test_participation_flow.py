@@ -44,6 +44,9 @@ from poli_insight.application.use_cases.open_session import OpenSessionCommand
 from poli_insight.application.use_cases.participant_access import (
     ParticipantAccessError,
 )
+from poli_insight.application.use_cases.replace_participant_access_grant import (
+    ReplaceParticipantAccessGrantCommand,
+)
 from poli_insight.application.use_cases.review_submission import (
     ReviewSubmissionCommand,
     ReviewSubmissionError,
@@ -205,6 +208,112 @@ def _answer(question_id: str, scale_value_id: str) -> DraftAnswerInput:
     return DraftAnswerInput(
         question_definition_id=question_id,
         raw_value_json={"selected_scale_value_id": scale_value_id},
+    )
+
+
+def test_admin_replacement_invalidates_old_link_and_preserves_work(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "replace-participant-access.sqlite"
+    container = _container(database_path)
+    session_id, group_id = _open_questionnaire(
+        container,
+        slug="replace-access-study",
+        response_format=ResponseFormat.DIRECT_RATING,
+        consent_required=False,
+    )
+    enrollment = container.participation.enroll.execute(
+        EnrollParticipantCommand(
+            session_id=session_id,
+            selected_group_id=group_id,
+            alias="rotation-participant",
+        )
+    )
+    workspace = container.page_queries.get_participation_workspace(
+        enrollment.participant_id
+    )
+    assert workspace is not None
+    saved = container.submissions.save_draft.execute(
+        SaveSubmissionDraftCommand(
+            session_id=session_id,
+            participant_id=enrollment.participant_id,
+            actor_id=enrollment.participant_id,
+            access_token=enrollment.access_token,
+            answers=(
+                _answer(
+                    workspace.questions[0].question_definition_id,
+                    workspace.scale_options[0].scale_value_id,
+                ),
+            ),
+        )
+    )
+    before = container.page_queries.get_session_participant_detail(
+        session_id, enrollment.participant_id
+    )
+    assert before is not None and before.draft is not None
+    metrics = container.page_queries.get_session_participant_metrics(session_id)
+    assert metrics.total_enrolled == 1
+    assert metrics.never_started == 0
+    assert metrics.active_drafts == 1
+    assert metrics.submitted_or_completed == 0
+    participant_rows = container.page_queries.list_session_participants(session_id)
+    assert participant_rows.total == 1
+    assert participant_rows.items[0].answer_progress.startswith("1 / ")
+    assert participant_rows.items[0].current_attempt == 1
+    assert participant_rows.items[0].resume_access_status == "active"
+
+    replaced = container.operations.replace_participant_access.execute(
+        ReplaceParticipantAccessGrantCommand(
+            session_id=session_id,
+            participant_id=enrollment.participant_id,
+            actor_id="operations-admin",
+            actor_roles=frozenset({"admin"}),
+        )
+    )
+
+    with pytest.raises(ParticipantAccessError):
+        container.participation.resume.execute(enrollment.access_token)
+    resumed = container.participation.resume.execute(replaced.access_token)
+    assert resumed.participant_id == enrollment.participant_id
+    after = container.page_queries.get_session_participant_detail(
+        session_id, enrollment.participant_id
+    )
+    assert after is not None and after.draft is not None
+    assert after.configuration_version == before.configuration_version
+    assert after.summary.group_name == before.summary.group_name
+    assert after.draft.submission_id == saved.submission_id
+    assert after.draft.answered_count == before.draft.answered_count
+    assert after.access is not None
+    assert after.access.access_grant_id == replaced.access_grant_id
+    assert after.access.status == "active"
+
+    with sqlite3.connect(database_path) as connection:
+        grants = connection.execute(
+            """
+            SELECT access_grant_id, token_digest, revoked_at,
+                   replaced_by_grant_id
+            FROM participant_access_grants
+            WHERE participant_id = ? ORDER BY issued_at
+            """,
+            (enrollment.participant_id,),
+        ).fetchall()
+        event = connection.execute(
+            """
+            SELECT before_json, after_json, source_metadata_json
+            FROM audit_events
+            WHERE entity_type = 'participant_access_grant'
+            ORDER BY occurred_at DESC LIMIT 1
+            """
+        ).fetchone()
+    assert len(grants) == 2
+    assert grants[0][2] is not None
+    assert grants[0][3] == replaced.access_grant_id
+    assert grants[1][1] == digest_token(replaced.access_token)
+    assert all(enrollment.access_token not in str(value) for row in grants for value in row)
+    assert event is not None
+    assert replaced.access_token not in "".join(str(value) for value in event)
+    assert digest_token(replaced.access_token) not in "".join(
+        str(value) for value in event
     )
 
 

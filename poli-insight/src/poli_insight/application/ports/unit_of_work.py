@@ -8,10 +8,12 @@ from poli_insight.application.ports.algorithm_repository import (
 from poli_insight.application.ports.audit_repository import AuditEventRepository
 from poli_insight.application.ports.operations_repository import (
     InvitationImportRepository,
+    ParticipantSubmissionImportRepository,
     SubmissionReviewRepository,
 )
 from poli_insight.application.ports.participant_repository import (
     ParticipantAccessGrantRepository,
+    ParticipantIdentityRepository,
     ParticipantRepository,
     SessionInvitationRepository,
 )
@@ -45,6 +47,8 @@ class UnitOfWork(Protocol):
     validations: ValidationRepository
     submission_reviews: SubmissionReviewRepository
     invitation_imports: InvitationImportRepository
+    participant_imports: ParticipantSubmissionImportRepository
+    participant_identities: ParticipantIdentityRepository
 
     def __enter__(self) -> Self:
         ...

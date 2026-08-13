@@ -38,6 +38,9 @@ class SqlAlchemyPageQueriesTests(unittest.TestCase):
         # Importing scenario models resolves SessionRow's snapshot FK metadata.
         self.assertIsNotNone(scenario_models.ScenarioSnapshotRow)
         engine = create_engine("sqlite+pysqlite:///:memory:")
+        ScenarioDefinitionRow.__table__.create(engine)
+        ScenarioSnapshotRow.__table__.create(engine)
+        ScenarioSnapshotFileRow.__table__.create(engine)
         SessionRow.__table__.create(engine)
         self.session_factory = sessionmaker(
             bind=engine,
@@ -46,6 +49,62 @@ class SqlAlchemyPageQueriesTests(unittest.TestCase):
             autoflush=False,
         )
         self.queries = SqlAlchemyPageQueries(self.session_factory)
+        definition_id = uuid4()
+        self.snapshot_id = uuid4()
+        with self.session_factory() as database_session:
+            database_session.add(
+                ScenarioDefinitionRow(
+                    scenario_definition_id=definition_id,
+                    scenario_key="public-budget",
+                    title="Public budget",
+                    domain="Public policy",
+                    description="Choose a public budget.",
+                    status="active",
+                    created_at=NOW,
+                    created_by="test-admin",
+                    updated_at=NOW,
+                    updated_by="test-admin",
+                )
+            )
+            database_session.add(
+                ScenarioSnapshotRow(
+                    scenario_snapshot_id=self.snapshot_id,
+                    scenario_definition_id=definition_id,
+                    declared_version="1.0",
+                    scenario_type="standard",
+                    schema_version=1,
+                    status="ready",
+                    title="Public budget",
+                    domain="Public policy",
+                    summary="Evaluate the available budget options.",
+                    policy_question="Which budget option should be selected?",
+                    manifest_json={"schema_version": 1},
+                    manifest_schema_version=1,
+                    root_hash="a" * 64,
+                    materialized_input_hash="b" * 64,
+                    source_uri="urn:test:public-budget",
+                    importer_version="test-importer/1",
+                    import_environment_json={},
+                    created_at=NOW,
+                    created_by="test-admin",
+                    ready_at=NOW,
+                )
+            )
+            scenario_source = b'{"tags": ["budget", "community"]}'
+            database_session.add(
+                ScenarioSnapshotFileRow(
+                    snapshot_file_id=uuid4(),
+                    scenario_snapshot_id=self.snapshot_id,
+                    logical_path="scenario.json",
+                    file_role="scenario_config",
+                    media_type="application/json",
+                    byte_size=len(scenario_source),
+                    content_hash="c" * 64,
+                    inline_bytes=scenario_source,
+                    immutable_object_uri=None,
+                )
+            )
+            database_session.commit()
 
     def test_public_catalog_enforces_status_discoverability_and_window(self) -> None:
         self._add_session(title="Open listed", status="open")
@@ -65,6 +124,19 @@ class SqlAlchemyPageQueriesTests(unittest.TestCase):
 
         self.assertEqual(result.total, 1)
         self.assertEqual(result.items[0].title, "Open listed")
+
+    def test_public_catalog_includes_details_from_imported_scenario(self) -> None:
+        self._add_session(title="Open listed", status="open")
+
+        result = self.queries.list_open_public_sessions(at=NOW)
+
+        summary = result.items[0]
+        self.assertEqual(summary.domain, "Public policy")
+        self.assertEqual(summary.tags, ("budget", "community"))
+        self.assertEqual(
+            summary.policy_question,
+            "Which budget option should be selected?",
+        )
 
     def test_public_search_treats_like_wildcards_as_text(self) -> None:
         self._add_session(title="Budget 100% review", status="open")
@@ -103,7 +175,7 @@ class SqlAlchemyPageQueriesTests(unittest.TestCase):
         closed_at = NOW - timedelta(hours=1) if status == "closed" else None
         row = SessionRow(
             session_id=uuid4(),
-            scenario_snapshot_id=uuid4(),
+            scenario_snapshot_id=self.snapshot_id,
             public_slug=f"session-{uuid4()}",
             title=title,
             description=None,

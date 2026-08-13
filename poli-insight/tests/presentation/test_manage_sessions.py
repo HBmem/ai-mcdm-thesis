@@ -264,6 +264,16 @@ from poli_insight.presentation.streamlit.pages.admin.manage_sessions import (
 
 
 class Queries:
+    def get_session_participant_metrics(self, session_id):
+        return SimpleNamespace(
+            total_enrolled=0,
+            never_started=0,
+            active_drafts=0,
+            completion_rate=0.0,
+            stale_drafts=0,
+            resume_links_expiring_soon=0,
+        )
+
     def list_session_invitations(self, session_id, **arguments):
         return PageResult((), arguments["page"], arguments["page_size"], 0)
 

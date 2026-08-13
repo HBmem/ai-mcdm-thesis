@@ -7,10 +7,12 @@ answer rows, while comment moderation has an independent lifecycle.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any
+from uuid import UUID
 
 from poli_insight.core.time import as_utc
 from poli_insight.domain.enum import (
@@ -133,7 +135,11 @@ def apply_submission_answer(
     row.raw_value_json = _copy_json(answer.raw_value_json)
     row.value_schema_version = answer.value_schema_version
     row.raw_value_hash = answer.raw_value_hash
-    row.selected_scale_value_id = answer.selected_scale_value_id
+    row.selected_scale_value_id = (
+        UUID(answer.selected_scale_value_id)
+        if answer.selected_scale_value_id is not None
+        else None
+    )
     row.numeric_value = answer.numeric_value
     row.rank_value = answer.rank_value
     row.answered_at = answer.answered_at
@@ -394,6 +400,7 @@ def _validate_status_transition(
         SubmissionStatus.DRAFT: {
             SubmissionStatus.DRAFT,
             SubmissionStatus.SUBMITTED,
+            SubmissionStatus.WITHDRAWN,
         },
         SubmissionStatus.SUBMITTED: {
             SubmissionStatus.SUBMITTED,

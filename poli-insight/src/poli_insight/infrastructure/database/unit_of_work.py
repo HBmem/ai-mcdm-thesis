@@ -12,6 +12,7 @@ from poli_insight.infrastructure.database.repositories.audit_repository import (
 )
 from poli_insight.infrastructure.database.repositories.operations_repository import (
     SqlAlchemyInvitationImportRepository,
+    SqlAlchemyParticipantSubmissionImportRepository,
     SqlAlchemySubmissionReviewRepository,
 )
 from poli_insight.infrastructure.database.repositories.participant_repository import (
@@ -19,6 +20,7 @@ from poli_insight.infrastructure.database.repositories.participant_repository im
     SqlAlchemyEnrollmentAccessCodeRepository,
     SqlAlchemyParticipantAccessGrantRepository,
     SqlAlchemyParticipantConsentRepository,
+    SqlAlchemyParticipantIdentityRepository,
     SqlAlchemyParticipantRepository,
     SqlAlchemySessionInvitationRepository,
 )
@@ -86,6 +88,12 @@ class SqlAlchemyUnitOfWork:
             self.database_session
         )
         self.invitation_imports = SqlAlchemyInvitationImportRepository(
+            self.database_session
+        )
+        self.participant_imports = SqlAlchemyParticipantSubmissionImportRepository(
+            self.database_session
+        )
+        self.participant_identities = SqlAlchemyParticipantIdentityRepository(
             self.database_session
         )
 

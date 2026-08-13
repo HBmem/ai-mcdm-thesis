@@ -21,10 +21,16 @@ from poli_insight.application.queries.page_queries import (
     AdminSessionDetail,
     AdminSessionSummary,
     AlgorithmImplementationOption,
+    AuthoredAnswerDetail,
+    CriterionWeightDetail,
     HomeActiveSessionSummary,
     PageQueries,
     PageQueryError,
     PageResult,
+    ParticipantAccessSummary,
+    ParticipantConsentSummary,
+    ParticipantDraftProgress,
+    ParticipantSubmissionAttempt,
     ParticipationGroupOption,
     ParticipationQuestion,
     ParticipationScaleOption,
@@ -45,6 +51,7 @@ from poli_insight.application.queries.page_queries import (
     SessionGroupProgress,
     SessionInvitationSummary,
     SessionParticipantDetail,
+    SessionParticipantMetrics,
     SessionParticipantSummary,
     SessionScenarioOption,
     SessionSubmissionDetail,
@@ -80,6 +87,7 @@ from poli_insight.infrastructure.database.models.operations import (
     SubmissionReviewDecisionRow,
 )
 from poli_insight.infrastructure.database.models.participation import (
+    ParticipantAccessGrantRow,
     ParticipantConsentRow,
     ParticipantRow,
     SessionInvitationRow,
@@ -106,8 +114,10 @@ from poli_insight.infrastructure.database.models.submission import (
     SubmissionRow,
 )
 from poli_insight.infrastructure.database.models.validation import (
+    ParticipantCriterionWeightRow,
     SubmissionValidationRow,
     ValidationMessageRow,
+    ValidationNormalizedAnswerRow,
 )
 
 DEFAULT_PAGE_SIZE = 10
@@ -154,8 +164,30 @@ class SqlAlchemyPageQueries(PageQueries):
             )
 
         count_statement = select(func.count()).select_from(SessionRow).where(*filters)
-        statement: Select[tuple[SessionRow]] = (
-            select(SessionRow)
+        scenario_config_bytes = (
+            select(ScenarioSnapshotFileRow.inline_bytes)
+            .where(
+                ScenarioSnapshotFileRow.scenario_snapshot_id
+                == ScenarioSnapshotRow.scenario_snapshot_id,
+                ScenarioSnapshotFileRow.file_role
+                == ScenarioFileRole.SCENARIO_CONFIG.value,
+            )
+            .order_by(ScenarioSnapshotFileRow.logical_path)
+            .limit(1)
+            .correlate(ScenarioSnapshotRow)
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                SessionRow,
+                ScenarioSnapshotRow,
+                scenario_config_bytes.label("scenario_config_bytes"),
+            )
+            .join(
+                ScenarioSnapshotRow,
+                ScenarioSnapshotRow.scenario_snapshot_id
+                == SessionRow.scenario_snapshot_id,
+            )
             .where(*filters)
             .order_by(
                 SessionRow.closes_at.is_(None),
@@ -170,12 +202,19 @@ class SqlAlchemyPageQueries(PageQueries):
         try:
             with self._session_factory() as database_session:
                 total = database_session.scalar(count_statement) or 0
-                rows = database_session.scalars(statement).all()
+                rows = database_session.execute(statement).all()
         except SQLAlchemyError as error:
             raise PageQueryError("Open sessions could not be loaded.") from error
 
         return PageResult(
-            items=tuple(_public_session_summary(row) for row in rows),
+            items=tuple(
+                _public_session_summary(
+                    session_row,
+                    snapshot_row,
+                    scenario_source,
+                )
+                for session_row, snapshot_row, scenario_source in rows
+            ),
             page=page,
             page_size=page_size,
             total=total,
@@ -910,15 +949,81 @@ class SqlAlchemyPageQueries(PageQueries):
         }.get(sort)
         if order is None:
             raise ValueError("Unsupported participant sort.")
+        query_time = utc_now()
+        latest_submission_id = (
+            select(SubmissionRow.submission_id)
+            .where(SubmissionRow.participant_id == ParticipantRow.participant_id)
+            .order_by(
+                SubmissionRow.attempt_number.desc(),
+                SubmissionRow.submission_id.desc(),
+            )
+            .limit(1)
+            .correlate(ParticipantRow)
+            .scalar_subquery()
+        )
+        latest_grant_id = (
+            select(ParticipantAccessGrantRow.access_grant_id)
+            .where(
+                ParticipantAccessGrantRow.participant_id
+                == ParticipantRow.participant_id
+            )
+            .order_by(
+                ParticipantAccessGrantRow.issued_at.desc(),
+                ParticipantAccessGrantRow.access_grant_id.desc(),
+            )
+            .limit(1)
+            .correlate(ParticipantRow)
+            .scalar_subquery()
+        )
+        current_submission = aliased(SubmissionRow)
+        current_grant = aliased(ParticipantAccessGrantRow)
+        answer_count = (
+            select(func.count(SubmissionAnswerRow.submission_answer_id))
+            .where(SubmissionAnswerRow.submission_id == latest_submission_id)
+            .correlate(ParticipantRow)
+            .scalar_subquery()
+        )
+        required_count = (
+            select(func.count(ResponseQuestionDefinitionRow.question_definition_id))
+            .where(
+                ResponseQuestionDefinitionRow.configuration_version_id
+                == ParticipantRow.configuration_version_id,
+                ResponseQuestionDefinitionRow.required.is_(True),
+            )
+            .correlate(ParticipantRow)
+            .scalar_subquery()
+        )
+        grant_status = case(
+            (current_grant.access_grant_id.is_(None), "missing"),
+            (current_grant.replaced_by_grant_id.is_not(None), "replaced"),
+            (current_grant.revoked_at.is_not(None), "revoked"),
+            (current_grant.expires_at <= query_time, "expired"),
+            else_="active",
+        )
         base = (
             select(
                 ParticipantRow,
                 SessionStakeholderGroupRow.name.label("group_name"),
+                func.coalesce(answer_count, 0).label("answer_count"),
+                required_count.label("required_count"),
+                current_submission.attempt_number.label("current_attempt"),
+                current_submission.last_saved_at.label("last_saved_at"),
+                current_grant.last_used_at.label("grant_last_used_at"),
+                current_grant.expires_at.label("grant_expires_at"),
+                grant_status.label("grant_status"),
             )
             .join(
                 SessionStakeholderGroupRow,
                 SessionStakeholderGroupRow.session_stakeholder_group_id
                 == ParticipantRow.session_stakeholder_group_id,
+            )
+            .outerjoin(
+                current_submission,
+                current_submission.submission_id == latest_submission_id,
+            )
+            .outerjoin(
+                current_grant,
+                current_grant.access_grant_id == latest_grant_id,
             )
             .where(*filters)
         )
@@ -939,11 +1044,96 @@ class SqlAlchemyPageQueries(PageQueries):
             raise PageQueryError("Participants could not be loaded.") from error
         return PageResult(
             items=tuple(
-                _participant_summary(row.ParticipantRow, row.group_name) for row in rows
+                _participant_summary(
+                    row.ParticipantRow,
+                    row.group_name,
+                    answered_count=int(row.answer_count or 0),
+                    required_answer_count=int(row.required_count or 0),
+                    current_attempt=row.current_attempt,
+                    last_activity_at=max(
+                        value
+                        for value in (
+                            row.ParticipantRow.updated_at,
+                            row.last_saved_at,
+                            row.grant_last_used_at,
+                        )
+                        if value is not None
+                    ),
+                    resume_access_status=row.grant_status,
+                    resume_expires_at=row.grant_expires_at,
+                )
+                for row in rows
             ),
             page=page,
             page_size=page_size,
             total=int(total),
+        )
+
+    def get_session_participant_metrics(
+        self,
+        session_id: str,
+        *,
+        at: datetime | None = None,
+    ) -> SessionParticipantMetrics:
+        query_time = at or utc_now()
+        stale_before = query_time - timedelta(days=7)
+        expiring_before = query_time + timedelta(days=7)
+        participant_filters = (ParticipantRow.session_id == session_id,)
+        statement = select(
+            select(func.count(ParticipantRow.participant_id))
+            .where(*participant_filters)
+            .scalar_subquery()
+            .label("total_enrolled"),
+            select(func.count(ParticipantRow.participant_id))
+            .where(*participant_filters, ParticipantRow.started_at.is_(None))
+            .scalar_subquery()
+            .label("never_started"),
+            select(func.count(SubmissionRow.submission_id))
+            .where(
+                SubmissionRow.session_id == session_id,
+                SubmissionRow.status == SubmissionStatus.DRAFT.value,
+            )
+            .scalar_subquery()
+            .label("active_drafts"),
+            select(func.count(ParticipantRow.participant_id))
+            .where(*participant_filters, ParticipantRow.submitted_at.is_not(None))
+            .scalar_subquery()
+            .label("submitted_or_completed"),
+            select(func.count(SubmissionRow.submission_id))
+            .where(
+                SubmissionRow.session_id == session_id,
+                SubmissionRow.status == SubmissionStatus.DRAFT.value,
+                SubmissionRow.last_saved_at < stale_before,
+            )
+            .scalar_subquery()
+            .label("stale_drafts"),
+            select(func.count(ParticipantAccessGrantRow.access_grant_id))
+            .join(
+                ParticipantRow,
+                ParticipantRow.participant_id
+                == ParticipantAccessGrantRow.participant_id,
+            )
+            .where(
+                ParticipantRow.session_id == session_id,
+                ParticipantAccessGrantRow.revoked_at.is_(None),
+                ParticipantAccessGrantRow.expires_at > query_time,
+                ParticipantAccessGrantRow.expires_at <= expiring_before,
+            )
+            .scalar_subquery()
+            .label("resume_links_expiring_soon"),
+        )
+        try:
+            with self._session_factory() as database_session:
+                row = database_session.execute(statement).one()
+        except SQLAlchemyError as error:
+            raise PageQueryError("Participant metrics could not be loaded.") from error
+        return SessionParticipantMetrics(
+            total_enrolled=int(row.total_enrolled or 0),
+            never_started=int(row.never_started or 0),
+            active_drafts=int(row.active_drafts or 0),
+            submitted_or_completed=int(row.submitted_or_completed or 0),
+            stale_drafts=int(row.stale_drafts or 0),
+            resume_links_expiring_soon=int(row.resume_links_expiring_soon or 0),
         )
 
     def get_session_participant_detail(
@@ -951,12 +1141,30 @@ class SqlAlchemyPageQueries(PageQueries):
         session_id: str,
         participant_id: str,
     ) -> SessionParticipantDetail | None:
+        submission_count = (
+            select(func.count(SubmissionRow.submission_id))
+            .where(SubmissionRow.participant_id == ParticipantRow.participant_id)
+            .correlate(ParticipantRow)
+            .scalar_subquery()
+        )
+        detail_required_count = (
+            select(func.count(ResponseQuestionDefinitionRow.question_definition_id))
+            .where(
+                ResponseQuestionDefinitionRow.configuration_version_id
+                == ParticipantRow.configuration_version_id,
+                ResponseQuestionDefinitionRow.required.is_(True),
+            )
+            .correlate(ParticipantRow)
+            .scalar_subquery()
+        )
         statement = (
             select(
                 ParticipantRow,
                 SessionStakeholderGroupRow.name.label("group_name"),
                 SessionConfigurationVersionRow.version_number,
-                func.count(SubmissionRow.submission_id).label("submission_count"),
+                SessionConfigurationVersionRow.configuration_json,
+                submission_count.label("submission_count"),
+                detail_required_count.label("required_answer_count"),
             )
             .join(
                 SessionStakeholderGroupRow,
@@ -968,28 +1176,92 @@ class SqlAlchemyPageQueries(PageQueries):
                 SessionConfigurationVersionRow.configuration_version_id
                 == ParticipantRow.configuration_version_id,
             )
-            .outerjoin(
-                SubmissionRow,
-                SubmissionRow.participant_id == ParticipantRow.participant_id,
-            )
             .where(
                 ParticipantRow.session_id == session_id,
                 ParticipantRow.participant_id == participant_id,
-            )
-            .group_by(
-                ParticipantRow.participant_id,
-                SessionStakeholderGroupRow.name,
-                SessionConfigurationVersionRow.version_number,
             )
         )
         try:
             with self._session_factory() as database_session:
                 row = database_session.execute(statement).one_or_none()
+                if row is None:
+                    return None
+                attempt_validation = aliased(SubmissionValidationRow)
+                attempt_review = aliased(SubmissionReviewDecisionRow)
+                attempt_answer_count = (
+                    select(func.count(SubmissionAnswerRow.submission_answer_id))
+                    .where(
+                        SubmissionAnswerRow.submission_id
+                        == SubmissionRow.submission_id
+                    )
+                    .correlate(SubmissionRow)
+                    .scalar_subquery()
+                )
+                attempt_rows = database_session.execute(
+                    select(
+                        SubmissionRow,
+                        attempt_validation.status.label("validation_status"),
+                        attempt_review.status.label("review_status"),
+                        attempt_answer_count.label("answer_count"),
+                    )
+                    .select_from(SubmissionRow)
+                    .outerjoin(
+                        attempt_validation,
+                        attempt_validation.validation_id
+                        == _latest_validation_id(SubmissionRow.submission_id),
+                    )
+                    .outerjoin(
+                        attempt_review,
+                        attempt_review.decision_id
+                        == _latest_review_id(SubmissionRow.submission_id),
+                    )
+                    .where(SubmissionRow.participant_id == participant_id)
+                    .order_by(SubmissionRow.attempt_number.desc())
+                ).all()
+                grant_row = database_session.scalars(
+                    select(ParticipantAccessGrantRow)
+                    .where(
+                        ParticipantAccessGrantRow.participant_id == participant_id
+                    )
+                    .order_by(
+                        ParticipantAccessGrantRow.issued_at.desc(),
+                        ParticipantAccessGrantRow.access_grant_id.desc(),
+                    )
+                    .limit(1)
+                ).first()
+                consent_config = row.configuration_json.get("consent", {})
+                consent_required = (
+                    isinstance(consent_config, Mapping)
+                    and consent_config.get("required") is True
+                )
+                consent_version = (
+                    str(consent_config.get("version", "1"))
+                    if isinstance(consent_config, Mapping)
+                    else "1"
+                )
+                consent_row = database_session.scalars(
+                    select(ParticipantConsentRow)
+                    .where(
+                        ParticipantConsentRow.participant_id == participant_id,
+                        ParticipantConsentRow.configuration_version_id
+                        == row.ParticipantRow.configuration_version_id,
+                        ParticipantConsentRow.consent_version == consent_version,
+                    )
+                    .order_by(ParticipantConsentRow.accepted_at.desc())
+                    .limit(1)
+                ).first()
         except SQLAlchemyError as error:
             raise PageQueryError("Participant details could not be loaded.") from error
-        if row is None:
-            return None
         participant = row.ParticipantRow
+        required_answer_count = int(row.required_answer_count or 0)
+        draft_row = next(
+            (
+                item
+                for item in attempt_rows
+                if item.SubmissionRow.status == SubmissionStatus.DRAFT.value
+            ),
+            None,
+        )
         return SessionParticipantDetail(
             summary=_participant_summary(participant, row.group_name),
             configuration_version=row.version_number,
@@ -1004,6 +1276,60 @@ class SqlAlchemyPageQueries(PageQueries):
             completed_at=participant.completed_at,
             updated_at=participant.updated_at,
             submission_count=int(row.submission_count),
+            draft=(
+                None
+                if draft_row is None
+                else ParticipantDraftProgress(
+                    submission_id=str(draft_row.SubmissionRow.submission_id),
+                    attempt_number=draft_row.SubmissionRow.attempt_number,
+                    answered_count=int(draft_row.answer_count or 0),
+                    required_answer_count=required_answer_count,
+                    last_saved_at=draft_row.SubmissionRow.last_saved_at,
+                )
+            ),
+            attempts=tuple(
+                ParticipantSubmissionAttempt(
+                    submission_id=str(item.SubmissionRow.submission_id),
+                    attempt_number=item.SubmissionRow.attempt_number,
+                    status=SubmissionStatus(item.SubmissionRow.status),
+                    submitted_at=item.SubmissionRow.submitted_at,
+                    validation_status=(
+                        None
+                        if item.validation_status is None
+                        else ValidationStatus(item.validation_status)
+                    ),
+                    review_status=(
+                        SubmissionReviewStatus.PENDING
+                        if item.review_status is None
+                        else SubmissionReviewStatus(item.review_status)
+                    ),
+                    previous_submission_id=(
+                        None
+                        if item.SubmissionRow.previous_submission_id is None
+                        else str(item.SubmissionRow.previous_submission_id)
+                    ),
+                )
+                for item in attempt_rows
+            ),
+            access=(
+                None
+                if grant_row is None
+                else ParticipantAccessSummary(
+                    access_grant_id=str(grant_row.access_grant_id),
+                    issued_at=grant_row.issued_at,
+                    expires_at=grant_row.expires_at,
+                    last_used_at=grant_row.last_used_at,
+                    status=_grant_status(grant_row, at=utc_now()),
+                    revoked_at=grant_row.revoked_at,
+                    has_replacement=grant_row.replaced_by_grant_id is not None,
+                )
+            ),
+            consent=ParticipantConsentSummary(
+                required=consent_required,
+                completed=(not consent_required or consent_row is not None),
+                consent_version=consent_version,
+                accepted_at=(None if consent_row is None else consent_row.accepted_at),
+            ),
         )
 
     def list_session_submissions(
@@ -1164,7 +1490,12 @@ class SqlAlchemyPageQueries(PageQueries):
                 validation.validation_id.label("detail_validation_id"),
                 validation.status.label("detail_validation_status"),
                 validation.consistency_ratio.label("detail_consistency_ratio"),
+                validation.completion_ratio.label("detail_completion_ratio"),
+                validation.validator_version.label("detail_validator_version"),
                 validation.completed_at.label("detail_validation_completed_at"),
+                SessionConfigurationVersionRow.consistency_threshold.label(
+                    "detail_consistency_threshold"
+                ),
                 review.status.label("detail_review_status"),
                 review.reviewer_notes.label("detail_review_notes"),
                 review.decided_at.label("detail_reviewed_at"),
@@ -1180,6 +1511,11 @@ class SqlAlchemyPageQueries(PageQueries):
                 SessionStakeholderGroupRow,
                 SessionStakeholderGroupRow.session_stakeholder_group_id
                 == SubmissionRow.session_stakeholder_group_id,
+            )
+            .join(
+                SessionConfigurationVersionRow,
+                SessionConfigurationVersionRow.configuration_version_id
+                == SubmissionRow.configuration_version_id,
             )
             .outerjoin(
                 validation,
@@ -1210,6 +1546,97 @@ class SqlAlchemyPageQueries(PageQueries):
                                 == row.detail_validation_id
                             )
                             .order_by(ValidationMessageRow.display_order)
+                        )
+                    )
+                criterion = aliased(ScenarioCriterionRow)
+                left_criterion = aliased(ScenarioCriterionRow)
+                right_criterion = aliased(ScenarioCriterionRow)
+                alternative = aliased(ScenarioAlternativeRow)
+                scale_value = aliased(ScenarioScaleValueRow)
+                normalized = aliased(ValidationNormalizedAnswerRow)
+                answer_rows = database_session.execute(
+                    select(
+                        SubmissionAnswerRow,
+                        ResponseQuestionDefinitionRow,
+                        criterion.name.label("criterion_label"),
+                        left_criterion.name.label("left_criterion_label"),
+                        right_criterion.name.label("right_criterion_label"),
+                        alternative.name.label("alternative_label"),
+                        scale_value.label.label("scale_label"),
+                        scale_value.numeric_value.label("scale_numeric_value"),
+                        normalized.normalized_value_json.label("normalized_value"),
+                        normalized.crisp_value.label("normalized_crisp_value"),
+                        normalized.normalizer_version.label("normalizer_version"),
+                    )
+                    .select_from(SubmissionAnswerRow)
+                    .join(
+                        ResponseQuestionDefinitionRow,
+                        ResponseQuestionDefinitionRow.question_definition_id
+                        == SubmissionAnswerRow.question_definition_id,
+                    )
+                    .outerjoin(
+                        criterion,
+                        criterion.criterion_id
+                        == ResponseQuestionDefinitionRow.criterion_id,
+                    )
+                    .outerjoin(
+                        left_criterion,
+                        left_criterion.criterion_id
+                        == ResponseQuestionDefinitionRow.left_criterion_id,
+                    )
+                    .outerjoin(
+                        right_criterion,
+                        right_criterion.criterion_id
+                        == ResponseQuestionDefinitionRow.right_criterion_id,
+                    )
+                    .outerjoin(
+                        alternative,
+                        alternative.alternative_id
+                        == ResponseQuestionDefinitionRow.alternative_id,
+                    )
+                    .outerjoin(
+                        scale_value,
+                        scale_value.scale_value_id
+                        == SubmissionAnswerRow.selected_scale_value_id,
+                    )
+                    .outerjoin(
+                        normalized,
+                        (normalized.submission_answer_id
+                         == SubmissionAnswerRow.submission_answer_id)
+                        & (normalized.validation_id
+                           == row.detail_validation_id),
+                    )
+                    .where(SubmissionAnswerRow.submission_id == submission_id)
+                    .order_by(
+                        ResponseQuestionDefinitionRow.display_order,
+                        SubmissionAnswerRow.submission_answer_id,
+                    )
+                ).all()
+                weight_rows: tuple[Any, ...] = ()
+                if row.detail_validation_id is not None:
+                    weight_rows = tuple(
+                        database_session.execute(
+                            select(
+                                ParticipantCriterionWeightRow,
+                                ScenarioCriterionRow.name.label("criterion_label"),
+                                ScenarioCriterionRow.display_order.label(
+                                    "criterion_display_order"
+                                ),
+                            )
+                            .select_from(ParticipantCriterionWeightRow)
+                            .join(
+                                ScenarioCriterionRow,
+                                ScenarioCriterionRow.criterion_id
+                                == ParticipantCriterionWeightRow.criterion_id,
+                            )
+                            .where(
+                                ParticipantCriterionWeightRow.validation_id
+                                == row.detail_validation_id
+                            )
+                            .order_by(
+                                ScenarioCriterionRow.display_order,
+                                ScenarioCriterionRow.criterion_id,
+                            )
                         )
                     )
         except SQLAlchemyError as error:
@@ -1260,6 +1687,53 @@ class SqlAlchemyPageQueries(PageQueries):
             review_notes=row.detail_review_notes,
             reviewed_at=row.detail_reviewed_at,
             reviewed_by=row.detail_reviewed_by,
+            started_at=row.SubmissionRow.started_at,
+            submitted_at=row.SubmissionRow.submitted_at,
+            superseded_at=row.SubmissionRow.superseded_at,
+            withdrawn_at=row.SubmissionRow.withdrawn_at,
+            previous_submission_id=(
+                None
+                if row.SubmissionRow.previous_submission_id is None
+                else str(row.SubmissionRow.previous_submission_id)
+            ),
+            answer_schema_version=row.SubmissionRow.answer_schema_version,
+            completion_ratio=(
+                None
+                if row.detail_completion_ratio is None
+                else str(row.detail_completion_ratio)
+            ),
+            consistency_threshold=(
+                None
+                if row.detail_consistency_threshold is None
+                else str(row.detail_consistency_threshold)
+            ),
+            validator_version=row.detail_validator_version,
+            authored_answers=tuple(
+                _authored_answer_detail(item) for item in answer_rows
+            ),
+            criterion_weights=tuple(
+                CriterionWeightDetail(
+                    criterion_id=str(item.ParticipantCriterionWeightRow.criterion_id),
+                    criterion_label=item.criterion_label,
+                    display_order=item.criterion_display_order,
+                    crisp_weight=_decimal_text(
+                        item.ParticipantCriterionWeightRow.crisp_weight
+                    ),
+                    fuzzy_lower=_decimal_text(
+                        item.ParticipantCriterionWeightRow.fuzzy_lower
+                    ),
+                    fuzzy_middle=_decimal_text(
+                        item.ParticipantCriterionWeightRow.fuzzy_middle
+                    ),
+                    fuzzy_upper=_decimal_text(
+                        item.ParticipantCriterionWeightRow.fuzzy_upper
+                    ),
+                    derivation_metadata=(
+                        item.ParticipantCriterionWeightRow.derivation_metadata_json
+                    ),
+                )
+                for item in weight_rows
+            ),
         )
 
     def list_validation_queue(
@@ -1825,12 +2299,30 @@ def _scenario_source_document(file_rows: Sequence[Any]) -> dict[str, Any]:
             continue
         if row.inline_bytes is None:
             continue
-        try:
-            document = json.loads(bytes(row.inline_bytes).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
-            return {}
-        return document if isinstance(document, dict) else {}
+        return _scenario_document_from_bytes(row.inline_bytes)
     return {}
+
+
+def _scenario_document_from_bytes(content: Any) -> dict[str, Any]:
+    if content is None:
+        return {}
+    try:
+        document = json.loads(bytes(content).decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _scenario_tags(
+    manifest: Mapping[str, Any],
+    scenario_source: Any,
+) -> tuple[str, ...]:
+    raw_tags = manifest.get("tags")
+    if raw_tags is None:
+        raw_tags = _scenario_document_from_bytes(scenario_source).get("tags", ())
+    if not isinstance(raw_tags, Sequence) or isinstance(raw_tags, (str, bytes)):
+        return ()
+    return tuple(tag for tag in raw_tags if isinstance(tag, str))
 
 
 def _scenario_configuration_defaults(
@@ -2309,6 +2801,13 @@ def _participant_label(participant_id: Any, alias: str | None) -> str:
 def _participant_summary(
     row: ParticipantRow,
     group_name: str,
+    *,
+    answered_count: int = 0,
+    required_answer_count: int = 0,
+    current_attempt: int | None = None,
+    last_activity_at: datetime | None = None,
+    resume_access_status: str = "missing",
+    resume_expires_at: datetime | None = None,
 ) -> SessionParticipantSummary:
     if row.completed_at is not None:
         progress = "Completed"
@@ -2327,6 +2826,68 @@ def _participant_summary(
         access_status=ParticipantAccessStatus(row.access_status),
         progress=progress,
         enrolled_at=row.enrolled_at,
+        answered_count=answered_count,
+        required_answer_count=required_answer_count,
+        current_attempt=current_attempt,
+        last_activity_at=last_activity_at,
+        resume_access_status=resume_access_status,
+        resume_expires_at=resume_expires_at,
+    )
+
+
+def _grant_status(row: ParticipantAccessGrantRow, *, at: datetime) -> str:
+    if row.replaced_by_grant_id is not None:
+        return "replaced"
+    if row.revoked_at is not None:
+        return "revoked"
+    if row.expires_at <= at:
+        return "expired"
+    if row.issued_at > at:
+        return "not_yet_active"
+    return "active"
+
+
+def _optional_identifier(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _decimal_text(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _authored_answer_detail(row: Any) -> AuthoredAnswerDetail:
+    answer = row.SubmissionAnswerRow
+    question = row.ResponseQuestionDefinitionRow
+    normalized_value = row.normalized_value
+    return AuthoredAnswerDetail(
+        submission_answer_id=str(answer.submission_answer_id),
+        question_definition_id=str(answer.question_definition_id),
+        display_order=question.display_order,
+        prompt=question.prompt_snapshot,
+        question_type=QuestionType(question.question_type),
+        criterion_id=_optional_identifier(question.criterion_id),
+        criterion_label=row.criterion_label,
+        left_criterion_id=_optional_identifier(question.left_criterion_id),
+        left_criterion_label=row.left_criterion_label,
+        right_criterion_id=_optional_identifier(question.right_criterion_id),
+        right_criterion_label=row.right_criterion_label,
+        alternative_id=_optional_identifier(question.alternative_id),
+        alternative_label=row.alternative_label,
+        selected_scale_value_id=_optional_identifier(answer.selected_scale_value_id),
+        selected_scale_label=row.scale_label,
+        selected_scale_numeric_value=_decimal_text(row.scale_numeric_value),
+        raw_value=answer.raw_value_json,
+        numeric_value=_decimal_text(answer.numeric_value),
+        rank_value=answer.rank_value,
+        answered_at=answer.answered_at,
+        response_time_ms=answer.response_time_ms,
+        normalized_value=(
+            normalized_value
+            if isinstance(normalized_value, Mapping)
+            else None
+        ),
+        normalized_crisp_value=_decimal_text(row.normalized_crisp_value),
+        normalizer_version=row.normalizer_version,
     )
 
 
@@ -2443,12 +3004,19 @@ def _latest_review_id(submission_id: Any):
     )
 
 
-def _public_session_summary(row: SessionRow) -> PublicSessionSummary:
+def _public_session_summary(
+    row: SessionRow,
+    snapshot_row: ScenarioSnapshotRow,
+    scenario_source: Any,
+) -> PublicSessionSummary:
     return PublicSessionSummary(
         session_id=str(row.session_id),
         public_slug=row.public_slug,
         title=row.title,
         description=row.description,
+        domain=snapshot_row.domain,
+        tags=_scenario_tags(snapshot_row.manifest_json, scenario_source),
+        policy_question=snapshot_row.policy_question,
         closes_at=row.closes_at,
         enrollment_mode=EnrollmentMode(row.enrollment_mode),
         access_code_mode=AccessCodeMode(row.access_code_mode),

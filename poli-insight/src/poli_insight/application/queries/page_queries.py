@@ -76,6 +76,9 @@ class PublicSessionSummary:
     public_slug: str
     title: str
     description: str | None
+    domain: str
+    tags: tuple[str, ...]
+    policy_question: str
     closes_at: datetime | None
     enrollment_mode: EnrollmentMode
     access_code_mode: AccessCodeMode
@@ -268,6 +271,77 @@ class SessionParticipantSummary:
     access_status: ParticipantAccessStatus
     progress: str
     enrolled_at: datetime
+    answered_count: int = 0
+    required_answer_count: int = 0
+    current_attempt: int | None = None
+    last_activity_at: datetime | None = None
+    resume_access_status: str = "missing"
+    resume_expires_at: datetime | None = None
+
+    @property
+    def answer_progress(self) -> str:
+        return f"{self.answered_count} / {self.required_answer_count}"
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantAccessSummary:
+    access_grant_id: str
+    issued_at: datetime
+    expires_at: datetime
+    last_used_at: datetime | None
+    status: str
+    revoked_at: datetime | None
+    has_replacement: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantDraftProgress:
+    submission_id: str
+    attempt_number: int
+    answered_count: int
+    required_answer_count: int
+    last_saved_at: datetime
+
+    @property
+    def completion_percentage(self) -> float:
+        if self.required_answer_count == 0:
+            return 100.0
+        return min(100.0, self.answered_count / self.required_answer_count * 100)
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantSubmissionAttempt:
+    submission_id: str
+    attempt_number: int
+    status: SubmissionStatus
+    submitted_at: datetime | None
+    validation_status: ValidationStatus | None
+    review_status: SubmissionReviewStatus
+    previous_submission_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantConsentSummary:
+    required: bool
+    completed: bool
+    consent_version: str
+    accepted_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionParticipantMetrics:
+    total_enrolled: int
+    never_started: int
+    active_drafts: int
+    submitted_or_completed: int
+    stale_drafts: int
+    resume_links_expiring_soon: int
+
+    @property
+    def completion_rate(self) -> float:
+        if self.total_enrolled == 0:
+            return 0.0
+        return self.submitted_or_completed / self.total_enrolled * 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +382,10 @@ class SessionParticipantDetail:
     completed_at: datetime | None
     updated_at: datetime
     submission_count: int
+    draft: ParticipantDraftProgress | None
+    attempts: tuple[ParticipantSubmissionAttempt, ...]
+    access: ParticipantAccessSummary | None
+    consent: ParticipantConsentSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +404,73 @@ class SessionSubmissionDetail:
     review_notes: str | None
     reviewed_at: datetime | None
     reviewed_by: str | None
+    started_at: datetime
+    submitted_at: datetime | None
+    superseded_at: datetime | None
+    withdrawn_at: datetime | None
+    previous_submission_id: str | None
+    answer_schema_version: int | None
+    completion_ratio: str | None
+    consistency_threshold: str | None
+    validator_version: str | None
+    authored_answers: tuple[AuthoredAnswerDetail, ...]
+    criterion_weights: tuple[CriterionWeightDetail, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoredAnswerDetail:
+    submission_answer_id: str
+    question_definition_id: str
+    display_order: int
+    prompt: str
+    question_type: QuestionType
+    criterion_id: str | None
+    criterion_label: str | None
+    left_criterion_id: str | None
+    left_criterion_label: str | None
+    right_criterion_id: str | None
+    right_criterion_label: str | None
+    alternative_id: str | None
+    alternative_label: str | None
+    selected_scale_value_id: str | None
+    selected_scale_label: str | None
+    selected_scale_numeric_value: str | None
+    raw_value: Mapping[str, object]
+    numeric_value: str | None
+    rank_value: int | None
+    answered_at: datetime
+    response_time_ms: int | None
+    normalized_value: Mapping[str, object] | None
+    normalized_crisp_value: str | None
+    normalizer_version: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "raw_value", MappingProxyType(dict(self.raw_value)))
+        if self.normalized_value is not None:
+            object.__setattr__(
+                self,
+                "normalized_value",
+                MappingProxyType(dict(self.normalized_value)),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CriterionWeightDetail:
+    criterion_id: str
+    criterion_label: str
+    display_order: int
+    crisp_weight: str | None
+    fuzzy_lower: str | None
+    fuzzy_middle: str | None
+    fuzzy_upper: str | None
+    derivation_metadata: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "derivation_metadata",
+            MappingProxyType(dict(self.derivation_metadata)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -621,6 +766,13 @@ class PageQueries(Protocol):
         page: int = 1,
         page_size: int = 10,
     ) -> PageResult[SessionParticipantSummary]: ...
+
+    def get_session_participant_metrics(
+        self,
+        session_id: str,
+        *,
+        at: datetime | None = None,
+    ) -> SessionParticipantMetrics: ...
 
     def get_session_participant_detail(
         self,

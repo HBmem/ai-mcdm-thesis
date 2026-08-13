@@ -4,6 +4,28 @@ import unittest
 
 from streamlit.testing.v1 import AppTest
 
+CATALOG_CARD_APP = """
+from poli_insight.application.queries.page_queries import PublicSessionSummary
+from poli_insight.domain.enum import AccessCodeMode, EnrollmentMode
+from poli_insight.presentation.streamlit.pages.public.participate import (
+    _render_session_card,
+)
+
+session = PublicSessionSummary(
+    session_id="session-1",
+    public_slug="public-study",
+    title="Public study",
+    description="A public questionnaire.",
+    domain="Public policy",
+    tags=("budget", "community"),
+    policy_question="Which budget option should be selected?",
+    closes_at=None,
+    enrollment_mode=EnrollmentMode.OPEN,
+    access_code_mode=AccessCodeMode.NONE,
+)
+_render_session_card(session, timezone_name="UTC")
+"""
+
 ENROLLMENT_APP = """
 from types import SimpleNamespace
 
@@ -140,8 +162,87 @@ context = SimpleNamespace(
 _render_authenticated_workspace(context, "private-resume-token")
 """
 
+SAVE_LINK_DIALOG_APP = """
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import streamlit as st
+
+from poli_insight.presentation.streamlit.pages.public.participate import (
+    _PENDING_RESUME_KEY,
+    _PendingResumeCredential,
+    _render_save_resume_link_dialog,
+)
+
+if "dialog-test:initialized" not in st.session_state:
+    st.session_state["dialog-test:initialized"] = True
+    st.session_state[_PENDING_RESUME_KEY] = _PendingResumeCredential(
+        resume_url=(
+            "https://research.example.test/?session=public-study&"
+            "access=private-resume-token"
+        ),
+        expires_at=datetime(2026, 9, 4, 12, tzinfo=UTC),
+    )
+
+context = SimpleNamespace(
+    container=SimpleNamespace(
+        settings=SimpleNamespace(app_timezone="UTC"),
+    ),
+)
+if _PENDING_RESUME_KEY in st.session_state:
+    _render_save_resume_link_dialog(context)
+else:
+    st.write("Temporary credential cleared")
+"""
+
 
 class ParticipatePageTests(unittest.TestCase):
+    def test_private_resume_link_dialog_requires_acknowledgement_and_clears(self) -> None:
+        app = AppTest.from_string(SAVE_LINK_DIALOG_APP, default_timeout=10).run()
+
+        self.assertFalse(app.exception)
+        self.assertTrue(
+            any(
+                "session=public-study&access=private-resume-token" in item.value
+                for item in app.code
+            )
+        )
+        self.assertTrue(any("Expires" in item.value for item in app.caption))
+        continue_button = next(
+            item for item in app.button if item.label == "Continue to questionnaire"
+        )
+        self.assertTrue(continue_button.disabled)
+
+        acknowledgement = next(
+            item for item in app.checkbox if item.label.startswith("I have saved")
+        )
+        app = acknowledgement.check().run()
+        continue_button = next(
+            item for item in app.button if item.label == "Continue to questionnaire"
+        )
+        self.assertFalse(continue_button.disabled)
+        app = continue_button.click().run()
+
+        self.assertFalse(app.exception)
+        self.assertTrue(
+            any("Temporary credential cleared" in item.value for item in app.markdown)
+        )
+
+    def test_catalog_card_renders_scenario_details(self) -> None:
+        app = AppTest.from_string(CATALOG_CARD_APP, default_timeout=10).run()
+
+        self.assertFalse(app.exception)
+        markdown = tuple(item.value for item in app.markdown)
+        self.assertTrue(any("Public policy" in value for value in markdown))
+        self.assertTrue(any("budget" in value for value in markdown))
+        self.assertIn("**Policy question**", markdown)
+        self.assertTrue(
+            any(
+                "Which budget option should be selected?" in value
+                for value in markdown
+            )
+        )
+
     def test_enrollment_without_access_code_enables_when_requirements_met(
         self,
     ) -> None:

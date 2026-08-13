@@ -32,7 +32,6 @@ from poli_insight.domain.session import (
     SessionStakeholderGroup,
 )
 
-
 JsonObject = Mapping[str, Any]
 ANSWER_MANIFEST_SCHEMA_VERSION = 1
 DEFAULT_VALUE_SCHEMA_VERSION = 1
@@ -384,6 +383,7 @@ class Submission:
         at: datetime,
         previous_submission: Submission | None = None,
         client_metadata_json: JsonObject | None = None,
+        administrative_resubmission_override: bool = False,
     ) -> Submission:
         """Start attempt one or derive the next attempt from its predecessor."""
 
@@ -417,13 +417,20 @@ class Submission:
                 previous_submission,
                 participant=participant,
                 configuration=configuration,
+                administrative_override=administrative_resubmission_override,
             )
-            if not configuration.allow_resubmissions:
+            if (
+                not configuration.allow_resubmissions
+                and not administrative_resubmission_override
+            ):
                 raise SubmissionRuleViolation(
                     "The active configuration does not allow resubmissions."
                 )
             attempt_number = previous_submission.attempt_number + 1
-            if attempt_number > configuration.max_submissions_per_participant:
+            if (
+                attempt_number > configuration.max_submissions_per_participant
+                and not administrative_resubmission_override
+            ):
                 raise SubmissionRuleViolation(
                     "The participant has reached the configured submission "
                     "attempt limit."
@@ -673,6 +680,38 @@ class Submission:
             updated_by=actor_id,
         )
 
+    def withdraw_draft_for_replacement(
+        self,
+        *,
+        actor_id: str,
+        reason: str,
+        at: datetime,
+    ) -> Self:
+        """Freeze and withdraw a draft before an administrative replacement.
+
+        This transition preserves partial draft evidence without pretending it
+        satisfied the configured required-answer contract.
+        """
+
+        self._require_draft_edit(actor_id=actor_id, at=at)
+        _require_text(reason, "Submission withdrawal reason")
+        manifest = self._build_answer_manifest()
+        return replace(
+            self,
+            status=SubmissionStatus.WITHDRAWN,
+            answer_manifest_json=manifest,
+            answer_schema_version=ANSWER_MANIFEST_SCHEMA_VERSION,
+            answers_hash=hash_json(manifest),
+            submitted_at=at,
+            submitted_by=actor_id,
+            withdrawn_at=at,
+            withdrawn_by=actor_id,
+            withdrawal_reason=reason,
+            last_saved_at=at,
+            updated_at=at,
+            updated_by=actor_id,
+        )
+
     def validate_predecessor(self, predecessor: Submission) -> None:
         """Recheck that predecessor identity and attempt number are monotonic."""
 
@@ -774,14 +813,14 @@ class Submission:
             ("Submission updater", self.updated_by),
         ):
             _require_text(value, field_name)
-        for field_name, value in (
+        for field_name, optional_value in (
             ("Previous submission ID", self.previous_submission_id),
             ("Submission submitter", self.submitted_by),
             ("Submission superseder", self.superseded_by),
             ("Submission withdrawer", self.withdrawn_by),
             ("Submission withdrawal reason", self.withdrawal_reason),
         ):
-            _require_optional_text(value, field_name)
+            _require_optional_text(optional_value, field_name)
         _require_positive_integer(self.attempt_number, "Submission attempt")
         _validate_json(self.client_metadata_json, "Submission client metadata")
 
@@ -1001,14 +1040,9 @@ class Submission:
                 raise SubmissionRuleViolation(
                     f"Submission {field_name} does not match its configuration."
                 )
-        if self.attempt_number > configuration.max_submissions_per_participant:
-            raise SubmissionRuleViolation(
-                "Submission attempt exceeds the configured attempt limit."
-            )
-        if self.attempt_number > 1 and not configuration.allow_resubmissions:
-            raise SubmissionRuleViolation(
-                "Submission configuration does not allow resubmissions."
-            )
+        # Attempt-count and resubmission policy are creation-time rules in
+        # ``start``. Structural validation must continue to accept an audited
+        # administrative replacement that explicitly overrode those policies.
 
     def _validate_answer_set(
         self,
@@ -1119,9 +1153,16 @@ def _validate_resubmission_predecessor(
     *,
     participant: Participant,
     configuration: SessionConfigurationVersion,
+    administrative_override: bool = False,
 ) -> None:
     predecessor.validate_integrity()
-    if predecessor.status != SubmissionStatus.SUBMITTED:
+    if predecessor.status != SubmissionStatus.SUBMITTED and not (
+        administrative_override
+        and predecessor.status in {
+            SubmissionStatus.WITHDRAWN,
+            SubmissionStatus.SUPERSEDED,
+        }
+    ):
         raise SubmissionRuleViolation(
             "A resubmission must follow the current submitted attempt."
         )

@@ -132,6 +132,12 @@ def test_import_materializes_and_captures_public_safety_scenario() -> None:
     assert len(unit_of_work.audit_events.events) == 1
 
     snapshot = unit_of_work.scenarios.snapshots[result.root_hash]
+    assert snapshot.manifest_json["tags"] == [
+        "public_safety",
+        "public_policy",
+        "police",
+        "testing",
+    ]
     assert len(snapshot.criteria) == 4
     assert len(snapshot.alternatives) == 4
     assert len(snapshot.matrix_values) == 16

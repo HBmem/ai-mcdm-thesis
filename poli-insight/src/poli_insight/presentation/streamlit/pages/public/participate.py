@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime
 
 import streamlit as st
 from streamlit_extras.steps import steps  # type: ignore[import-untyped]
@@ -43,12 +45,29 @@ from poli_insight.presentation.streamlit.components.layout import (
     render_page_header,
 )
 from poli_insight.presentation.streamlit.context import PageContext
+from poli_insight.presentation.streamlit.urls import private_resume_url
 
 _SEARCH_KEY = "participate:search"
 _PAIRWISE_LEFT_KEY = "participate:pairwise-left"
+_PENDING_RESUME_KEY = "participate:pending-resume-credential"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _PendingResumeCredential:
+    resume_url: str
+    expires_at: datetime
+
+    def __repr__(self) -> str:
+        return "_PendingResumeCredential(resume_url=<redacted>)"
 
 
 def render(context: PageContext) -> None:
+    if isinstance(
+        st.session_state.get(_PENDING_RESUME_KEY),
+        _PendingResumeCredential,
+    ):
+        _render_save_resume_link_dialog(context)
+        return
     access_token = _query_value("access")
     if access_token:
         _render_authenticated_workspace(context, access_token)
@@ -71,21 +90,25 @@ def _render_catalog(context: PageContext) -> None:
             ),
         )
     )
-    with st.container(border=True):
+
+    invite, public = st.columns([0.4,0.6], )
+
+    with invite, st.container(border=True):
         st.subheader("Have an invitation or private resume link?", anchor=False)
         st.write(
             "Open the complete link supplied by the researcher. Unlisted and "
             "invitation-only studies do not appear in the public catalog."
         )
-    with st.form("participate:search-form"):
-        search = st.text_input(
-            "Search open studies",
-            value=st.session_state.get(_SEARCH_KEY, ""),
-            placeholder="Search by study title",
-        )
-        submitted = st.form_submit_button("Search", icon=":material/search:")
-    if submitted:
-        st.session_state[_SEARCH_KEY] = search.strip()
+    with public:
+        with st.form("participate:search-form", height="stretch"):
+            search = st.text_input(
+                "Search open studies",
+                value=st.session_state.get(_SEARCH_KEY, ""),
+                placeholder="Search by study title",
+            )
+            submitted = st.form_submit_button("Search", icon=":material/search:")
+        if submitted:
+            st.session_state[_SEARCH_KEY] = search.strip()
     result = context.queries.list_open_public_sessions(
         search=st.session_state.get(_SEARCH_KEY) or None,
     )
@@ -110,19 +133,35 @@ def _render_session_card(
     timezone_name: str,
 ) -> None:
     with st.container(border=True):
-        st.subheader(session.title, anchor=False)
-        if session.description:
-            st.write(session.description)
-        columns = st.columns(2)
-        columns[0].caption(
-            "Closes: "
-            + format_datetime(
-                session.closes_at,
-                timezone_name=timezone_name,
-                empty="No closing time listed",
+        header_columns = st.columns([0.7, 0.3], vertical_alignment="center")
+        with header_columns[0]:
+            st.subheader(session.title, anchor=False)
+            st.markdown(session.domain)
+            tags = ""
+            for tag in session.tags:
+                tags += f":blue-badge[{tag}] "
+            st.markdown(tags)
+        with header_columns[1]:
+            st.caption(_access_label(session))
+            st.caption(
+                "Closes: "
+                + format_datetime(
+                    session.closes_at,
+                    timezone_name=timezone_name,
+                    empty="No closing time listed",
+                )
             )
-        )
-        columns[1].caption(_access_label(session))
+        detail_columns = st.columns(2)
+        with detail_columns[0]:
+            st.markdown("**Policy question**")
+            st.write(session.policy_question)
+        with detail_columns[1]:
+            st.markdown("**Session Description**")
+            if session.description:
+                st.write(session.description)
+            else:
+                st.write("This study has no description. Contact the researcher for details.")
+
         if st.button(
             "View study",
             key=f"participate:session:{session.session_id}",
@@ -257,8 +296,67 @@ def _render_enrollment(context: PageContext, slug: str) -> None:
         st.query_params["session"] = slug
         st.query_params["access"] = result.access_token
         st.query_params.pop("invitation", None)
+        st.session_state[_PENDING_RESUME_KEY] = _PendingResumeCredential(
+            resume_url=private_resume_url(
+                context.container.settings.public_base_url,
+                session_slug=slug,
+                access_token=result.access_token,
+            ),
+            expires_at=result.access_token_expires_at,
+        )
         st.rerun()
     _back_to_catalog()
+
+
+@st.dialog("Save your private return link", width="large", dismissible=False)
+def _render_save_resume_link_dialog(context: PageContext) -> None:
+    pending = st.session_state.get(_PENDING_RESUME_KEY)
+    if not isinstance(pending, _PendingResumeCredential):
+        st.error("The one-time resume link is no longer available.")
+        return
+    st.warning(
+        "This private link grants access to your questionnaire. Do not share it.",
+        icon=":material/key:",
+    )
+    st.code(pending.resume_url, language=None, wrap_lines=True)
+    st.caption(
+        "Expires "
+        + format_datetime(
+            pending.expires_at,
+            timezone_name=context.container.settings.app_timezone,
+        )
+    )
+    st.write(
+        "Bookmark this page or copy the complete link now. Answers are retained "
+        "only after you choose **Save draft** or another action that saves them."
+    )
+    download = (
+        "Poli Insight private questionnaire return link\n\n"
+        f"{pending.resume_url}\n\n"
+        f"Expires: {pending.expires_at.isoformat()}\n"
+    )
+    st.download_button(
+        "Download link as text",
+        data=download,
+        file_name="poli-insight-private-return-link.txt",
+        mime="text/plain",
+        key="participate:resume-link:download",
+    )
+    acknowledged = st.checkbox(
+        "I have saved this link in a private place.",
+        key="participate:resume-link:acknowledged",
+    )
+    if st.button(
+        "Continue to questionnaire",
+        type="primary",
+        disabled=not acknowledged,
+        key="participate:resume-link:continue",
+    ):
+        # This is the only temporary application-owned plaintext copy. The
+        # query parameter remains because it is the participant credential.
+        st.session_state.pop(_PENDING_RESUME_KEY, None)
+        st.session_state.pop("participate:resume-link:acknowledged", None)
+        st.rerun()
 
 
 def _group_selection(session: PublicParticipationSession) -> str | None:
