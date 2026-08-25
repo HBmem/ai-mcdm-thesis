@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from poli_insight.domain.validation import SubmissionValidation
 
@@ -43,6 +44,19 @@ class ValidationRepository(Protocol):
         parameter_hash: str,
     ) -> SubmissionValidation | None:
         """Find an attempt with the schema's immutable input identity."""
+        ...
+
+    def list_by_input_identity(
+        self,
+        *,
+        submission_id: str,
+        answers_hash: str,
+        configuration_hash: str,
+        validator_implementation_id: str,
+        validator_version: str,
+        parameter_hash: str,
+    ) -> Sequence[SubmissionValidation]:
+        """Load every retry attempt for one immutable input identity."""
         ...
 
     def save(self, validation: SubmissionValidation) -> None:

@@ -22,6 +22,7 @@ from poli_insight.application.queries.page_queries import (
     AdminSessionSummary,
     AlgorithmImplementationOption,
     AuthoredAnswerDetail,
+    ConfiguredAlgorithmSummary,
     CriterionWeightDetail,
     HomeActiveSessionSummary,
     PageQueries,
@@ -35,8 +36,15 @@ from poli_insight.application.queries.page_queries import (
     ParticipationQuestion,
     ParticipationScaleOption,
     ParticipationWorkspace,
+    ProcessingGroupSubmissionSummary,
+    ProcessingMatrixView,
+    ProcessingQueueMode,
+    ProcessingSessionSummary,
+    ProcessingSubmissionContext,
     PublicParticipationSession,
     PublicSessionSummary,
+    RankingAlternativeView,
+    RankingResultView,
     ScenarioAlternativePreview,
     ScenarioCriterionPreview,
     ScenarioFilePreview,
@@ -48,17 +56,21 @@ from poli_insight.application.queries.page_queries import (
     SessionAuditEventSummary,
     SessionCatalogMetrics,
     SessionConfigurationSummary,
+    SessionDateField,
     SessionGroupProgress,
     SessionInvitationSummary,
     SessionParticipantDetail,
     SessionParticipantMetrics,
     SessionParticipantSummary,
     SessionScenarioOption,
+    SessionSearchFilters,
     SessionSubmissionDetail,
     SessionSubmissionSummary,
+    SessionValidationOverview,
     ValidationQueueItem,
 )
 from poli_insight.core.time import utc_now
+from poli_insight.domain.content_hash import hash_json
 from poli_insight.domain.enum import (
     AccessCodeMode,
     AlgorithmRole,
@@ -72,6 +84,7 @@ from poli_insight.domain.enum import (
     QuestionType,
     ResponseFormat,
     ResponseTargetType,
+    RunStatus,
     ScenarioDefinitionStatus,
     ScenarioFileRole,
     ScenarioSnapshotStatus,
@@ -82,6 +95,7 @@ from poli_insight.domain.enum import (
     SubmissionStatus,
     ValidationStatus,
 )
+from poli_insight.infrastructure.database.json_codec import json_from_storage
 from poli_insight.infrastructure.database.models.audit import AuditEventRow
 from poli_insight.infrastructure.database.models.operations import (
     SubmissionReviewDecisionRow,
@@ -91,6 +105,15 @@ from poli_insight.infrastructure.database.models.participation import (
     ParticipantConsentRow,
     ParticipantRow,
     SessionInvitationRow,
+)
+from poli_insight.infrastructure.database.models.processing import (
+    ProcessingMatrixRow,
+    ProcessingRunRow,
+    ProcessingRunSubmissionRow,
+)
+from poli_insight.infrastructure.database.models.ranking import (
+    RankingResultRow,
+    RankingRunRow,
 )
 from poli_insight.infrastructure.database.models.scenario import (
     ScenarioAlternativeRow,
@@ -105,6 +128,7 @@ from poli_insight.infrastructure.database.models.scenario import (
 from poli_insight.infrastructure.database.models.session import (
     AlgorithmImplementationRow,
     ResponseQuestionDefinitionRow,
+    SessionAlgorithmConfigRow,
     SessionConfigurationVersionRow,
     SessionRow,
     SessionStakeholderGroupRow,
@@ -118,6 +142,7 @@ from poli_insight.infrastructure.database.models.validation import (
     SubmissionValidationRow,
     ValidationMessageRow,
     ValidationNormalizedAnswerRow,
+    ValidationPreparedMatrixRow,
 )
 
 DEFAULT_PAGE_SIZE = 10
@@ -504,14 +529,17 @@ class SqlAlchemyPageQueries(PageQueries):
     def get_session_catalog_metrics(
         self,
         *,
+        filters: SessionSearchFilters | None = None,
         search: str | None = None,
         status: SessionStatus | None = None,
         scenario_key: str | None = None,
     ) -> SessionCatalogMetrics:
-        filters = _session_filters(
+        query_filters = _session_filters(
+            session_filters=filters,
             search=search,
             status=status,
             scenario_key=scenario_key,
+            timezone=self._timezone,
         )
         attention_count = _session_attention_count()
         statement = (
@@ -546,7 +574,7 @@ class SqlAlchemyPageQueries(PageQueries):
                 == SessionRow.scenario_snapshot_id,
             )
             .join(ScenarioDefinitionRow)
-            .where(*filters)
+            .where(*query_filters)
         )
         try:
             with self._session_factory() as database_session:
@@ -598,6 +626,7 @@ class SqlAlchemyPageQueries(PageQueries):
     def list_admin_sessions(
         self,
         *,
+        filters: SessionSearchFilters | None = None,
         search: str | None = None,
         status: SessionStatus | None = None,
         scenario_key: str | None = None,
@@ -605,10 +634,12 @@ class SqlAlchemyPageQueries(PageQueries):
         page_size: int = DEFAULT_PAGE_SIZE,
     ) -> PageResult[AdminSessionSummary]:
         _validate_paging(page=page, page_size=page_size)
-        filters = _session_filters(
+        query_filters = _session_filters(
+            session_filters=filters,
             search=search,
             status=status,
             scenario_key=scenario_key,
+            timezone=self._timezone,
         )
         count_statement = (
             select(func.count(SessionRow.session_id))
@@ -619,11 +650,11 @@ class SqlAlchemyPageQueries(PageQueries):
                 == SessionRow.scenario_snapshot_id,
             )
             .join(ScenarioDefinitionRow)
-            .where(*filters)
+            .where(*query_filters)
         )
         statement = (
             _admin_session_summary_statement()
-            .where(*filters)
+            .where(*query_filters)
             .order_by(SessionRow.updated_at.desc(), SessionRow.title)
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -693,7 +724,7 @@ class SqlAlchemyPageQueries(PageQueries):
                 SessionStakeholderGroupRow.name.label("group_name"),
             )
             .select_from(SubmissionRow)
-            .join(
+            .outerjoin(
                 ParticipantRow,
                 ParticipantRow.participant_id == SubmissionRow.participant_id,
             )
@@ -1191,8 +1222,7 @@ class SqlAlchemyPageQueries(PageQueries):
                 attempt_answer_count = (
                     select(func.count(SubmissionAnswerRow.submission_answer_id))
                     .where(
-                        SubmissionAnswerRow.submission_id
-                        == SubmissionRow.submission_id
+                        SubmissionAnswerRow.submission_id == SubmissionRow.submission_id
                     )
                     .correlate(SubmissionRow)
                     .scalar_subquery()
@@ -1213,16 +1243,18 @@ class SqlAlchemyPageQueries(PageQueries):
                     .outerjoin(
                         attempt_review,
                         attempt_review.decision_id
-                        == _latest_review_id(SubmissionRow.submission_id),
+                        == _latest_review_id(
+                            SubmissionRow.submission_id,
+                            attempt_validation.validation_id,
+                            attempt_validation,
+                        ),
                     )
                     .where(SubmissionRow.participant_id == participant_id)
                     .order_by(SubmissionRow.attempt_number.desc())
                 ).all()
                 grant_row = database_session.scalars(
                     select(ParticipantAccessGrantRow)
-                    .where(
-                        ParticipantAccessGrantRow.participant_id == participant_id
-                    )
+                    .where(ParticipantAccessGrantRow.participant_id == participant_id)
                     .order_by(
                         ParticipantAccessGrantRow.issued_at.desc(),
                         ParticipantAccessGrantRow.access_grant_id.desc(),
@@ -1405,7 +1437,12 @@ class SqlAlchemyPageQueries(PageQueries):
             )
             .outerjoin(
                 review,
-                review.decision_id == _latest_review_id(SubmissionRow.submission_id),
+                review.decision_id
+                == _latest_review_id(
+                    SubmissionRow.submission_id,
+                    validation.validation_id,
+                    validation,
+                ),
             )
             .where(*filters)
         )
@@ -1524,7 +1561,12 @@ class SqlAlchemyPageQueries(PageQueries):
             )
             .outerjoin(
                 review,
-                review.decision_id == _latest_review_id(SubmissionRow.submission_id),
+                review.decision_id
+                == _latest_review_id(
+                    SubmissionRow.submission_id,
+                    validation.validation_id,
+                    validation,
+                ),
             )
             .where(
                 SubmissionRow.session_id == session_id,
@@ -1601,10 +1643,11 @@ class SqlAlchemyPageQueries(PageQueries):
                     )
                     .outerjoin(
                         normalized,
-                        (normalized.submission_answer_id
-                         == SubmissionAnswerRow.submission_answer_id)
-                        & (normalized.validation_id
-                           == row.detail_validation_id),
+                        (
+                            normalized.submission_answer_id
+                            == SubmissionAnswerRow.submission_answer_id
+                        )
+                        & (normalized.validation_id == row.detail_validation_id),
                     )
                     .where(SubmissionAnswerRow.submission_id == submission_id)
                     .order_by(
@@ -1781,8 +1824,11 @@ class SqlAlchemyPageQueries(PageQueries):
                 SubmissionRow,
                 ParticipantRow.alias.label("participant_alias"),
                 SessionStakeholderGroupRow.name.label("group_name"),
+                validation.validation_id.label("validation_id"),
                 validation.status.label("validation_status"),
+                validation.completion_ratio.label("completion_ratio"),
                 validation.consistency_ratio.label("consistency_ratio"),
+                validation.failure_code.label("failure_code"),
                 message_count.label("message_count"),
                 review.status.label("review_status"),
                 review.decided_at.label("reviewed_at"),
@@ -1804,7 +1850,12 @@ class SqlAlchemyPageQueries(PageQueries):
             )
             .outerjoin(
                 review,
-                review.decision_id == _latest_review_id(SubmissionRow.submission_id),
+                review.decision_id
+                == _latest_review_id(
+                    SubmissionRow.submission_id,
+                    validation.validation_id,
+                    validation,
+                ),
             )
             .where(*filters)
         )
@@ -1838,6 +1889,9 @@ class SqlAlchemyPageQueries(PageQueries):
             items=tuple(
                 ValidationQueueItem(
                     submission_id=str(row.SubmissionRow.submission_id),
+                    validation_id=(
+                        None if row.validation_id is None else str(row.validation_id)
+                    ),
                     participant_label=_participant_label(
                         row.SubmissionRow.participant_id,
                         row.participant_alias,
@@ -1850,11 +1904,17 @@ class SqlAlchemyPageQueries(PageQueries):
                         if row.validation_status is None
                         else ValidationStatus(row.validation_status)
                     ),
+                    completion_ratio=(
+                        None
+                        if row.completion_ratio is None
+                        else str(row.completion_ratio)
+                    ),
                     consistency_ratio=(
                         None
                         if row.consistency_ratio is None
                         else str(row.consistency_ratio)
                     ),
+                    failure_code=row.failure_code,
                     validation_message_count=int(row.message_count or 0),
                     review_status=(
                         SubmissionReviewStatus.PENDING
@@ -1870,6 +1930,812 @@ class SqlAlchemyPageQueries(PageQueries):
             page_size=page_size,
             total=int(total),
         )
+
+    def get_session_validation_overview(
+        self,
+        session_id: str,
+    ) -> SessionValidationOverview | None:
+        validation = aliased(SubmissionValidationRow)
+        review = aliased(SubmissionReviewDecisionRow)
+        current_statement = (
+            select(
+                SubmissionRow.submission_id,
+                SubmissionRow.participant_id,
+                SubmissionRow.session_stakeholder_group_id,
+                SubmissionRow.answers_hash,
+                ParticipantRow.access_status.label("participant_access_status"),
+                validation.status.label("validation_status"),
+                review.status.label("review_status"),
+            )
+            .select_from(SubmissionRow)
+            .outerjoin(
+                ParticipantRow,
+                ParticipantRow.participant_id == SubmissionRow.participant_id,
+            )
+            .outerjoin(
+                validation,
+                validation.validation_id
+                == _latest_validation_id(SubmissionRow.submission_id),
+            )
+            .outerjoin(
+                review,
+                review.decision_id
+                == _latest_review_id(
+                    SubmissionRow.submission_id,
+                    validation.validation_id,
+                    validation,
+                ),
+            )
+            .where(
+                SubmissionRow.session_id == session_id,
+                SubmissionRow.configuration_version_id
+                == select(SessionRow.active_configuration_version_id)
+                .where(SessionRow.session_id == session_id)
+                .scalar_subquery(),
+                SubmissionRow.status == SubmissionStatus.SUBMITTED.value,
+            )
+            .order_by(
+                SubmissionRow.participant_id,
+                SubmissionRow.submission_id,
+            )
+        )
+        latest_batch_statement = (
+            select(ProcessingRunRow)
+            .where(ProcessingRunRow.session_id == session_id)
+            .order_by(
+                ProcessingRunRow.run_number.desc(),
+                ProcessingRunRow.processing_run_id.desc(),
+            )
+            .limit(1)
+        )
+        try:
+            with self._session_factory() as database_session:
+                session_row = database_session.get(SessionRow, session_id)
+                if session_row is None:
+                    return None
+                current_rows = database_session.execute(current_statement).all()
+                latest_batch = database_session.scalars(latest_batch_statement).first()
+        except SQLAlchemyError as error:
+            raise PageQueryError(
+                "Session validation overview could not be loaded."
+            ) from error
+
+        status_counts = {
+            status: sum(row.validation_status == status.value for row in current_rows)
+            for status in ValidationStatus
+        }
+        warning_decisions_required = sum(
+            row.validation_status == ValidationStatus.VALID_WITH_WARNING.value
+            and row.review_status
+            not in {
+                SubmissionReviewStatus.ACCEPTED.value,
+                SubmissionReviewStatus.REJECTED.value,
+            }
+            for row in current_rows
+        )
+        current_roster_hash = (
+            None
+            if session_row.active_configuration_version_id is None
+            else hash_json(
+                [
+                    {
+                        "submission_id": str(row.submission_id),
+                        "participant_id": str(row.participant_id),
+                        "stakeholder_group_id": str(row.session_stakeholder_group_id),
+                        "answers_hash": row.answers_hash,
+                        "participant_access_status": (
+                            row.participant_access_status or "missing"
+                        ),
+                    }
+                    for row in current_rows
+                ]
+            )
+        )
+        return SessionValidationOverview(
+            session_id=session_id,
+            session_status=SessionStatus(session_row.status),
+            has_active_configuration=(
+                session_row.active_configuration_version_id is not None
+            ),
+            effective_submitted_count=len(current_rows),
+            unvalidated_count=sum(
+                row.validation_status is None for row in current_rows
+            ),
+            active_count=(
+                status_counts[ValidationStatus.PENDING]
+                + status_counts[ValidationStatus.RUNNING]
+            ),
+            valid_count=status_counts[ValidationStatus.VALID],
+            warned_count=status_counts[ValidationStatus.VALID_WITH_WARNING],
+            invalid_count=status_counts[ValidationStatus.INVALID],
+            error_count=status_counts[ValidationStatus.ERROR],
+            warning_decisions_required=warning_decisions_required,
+            latest_batch_id=(
+                None if latest_batch is None else str(latest_batch.processing_run_id)
+            ),
+            latest_batch_number=(
+                None if latest_batch is None else latest_batch.run_number
+            ),
+            latest_batch_status=(
+                None if latest_batch is None else RunStatus(latest_batch.status)
+            ),
+            latest_batch_created_at=(
+                None if latest_batch is None else latest_batch.created_at
+            ),
+            latest_batch_roster_hash=(
+                None if latest_batch is None else latest_batch.roster_hash
+            ),
+            current_roster_hash=current_roster_hash,
+            roster_is_current=(
+                latest_batch is not None
+                and current_roster_hash == latest_batch.roster_hash
+            ),
+        )
+
+    def get_processing_submission_context(
+        self,
+        session_id: str,
+    ) -> ProcessingSubmissionContext | None:
+        if not session_id.strip():
+            raise ValueError("session_id cannot be empty.")
+        session_statement = select(
+            SessionRow.active_configuration_version_id,
+        ).where(SessionRow.session_id == session_id)
+        try:
+            with self._session_factory() as database_session:
+                configuration_id = database_session.scalar(session_statement)
+                session_exists = database_session.scalar(
+                    select(func.count())
+                    .select_from(SessionRow)
+                    .where(SessionRow.session_id == session_id)
+                )
+                if not session_exists:
+                    return None
+                if configuration_id is None:
+                    return ProcessingSubmissionContext(session_id, ())
+                configuration = database_session.get(
+                    SessionConfigurationVersionRow,
+                    configuration_id,
+                )
+                if configuration is None:
+                    return ProcessingSubmissionContext(session_id, ())
+                groups = tuple(
+                    database_session.scalars(
+                        select(SessionStakeholderGroupRow)
+                        .where(
+                            SessionStakeholderGroupRow.configuration_version_id
+                            == configuration_id,
+                            SessionStakeholderGroupRow.is_active.is_(True),
+                        )
+                        .order_by(SessionStakeholderGroupRow.display_order)
+                    ).all()
+                )
+                participant_rows = database_session.execute(
+                    select(
+                        ParticipantRow.session_stakeholder_group_id,
+                        func.count().label("count_value"),
+                    )
+                    .where(
+                        ParticipantRow.session_id == session_id,
+                        ParticipantRow.configuration_version_id == configuration_id,
+                    )
+                    .group_by(ParticipantRow.session_stakeholder_group_id)
+                ).all()
+                attempt_rows = database_session.execute(
+                    select(
+                        SubmissionRow.session_stakeholder_group_id,
+                        SubmissionRow.status,
+                        func.count().label("count_value"),
+                        func.sum(
+                            case(
+                                (SubmissionRow.attempt_number > 1, 1),
+                                else_=0,
+                            )
+                        ).label("resubmission_count"),
+                    )
+                    .where(
+                        SubmissionRow.session_id == session_id,
+                        SubmissionRow.configuration_version_id == configuration_id,
+                    )
+                    .group_by(
+                        SubmissionRow.session_stakeholder_group_id,
+                        SubmissionRow.status,
+                    )
+                ).all()
+                validation = aliased(SubmissionValidationRow)
+                validation_rows = database_session.execute(
+                    select(
+                        SubmissionRow.session_stakeholder_group_id,
+                        validation.status,
+                        func.count().label("count_value"),
+                    )
+                    .outerjoin(
+                        validation,
+                        validation.validation_id
+                        == _latest_validation_id(SubmissionRow.submission_id),
+                    )
+                    .where(
+                        SubmissionRow.session_id == session_id,
+                        SubmissionRow.configuration_version_id == configuration_id,
+                        SubmissionRow.status == SubmissionStatus.SUBMITTED.value,
+                    )
+                    .group_by(
+                        SubmissionRow.session_stakeholder_group_id,
+                        validation.status,
+                    )
+                ).all()
+        except SQLAlchemyError as error:
+            raise PageQueryError(
+                "Processing submission context could not be loaded."
+            ) from error
+
+        enrolled_by_group = {
+            str(row.session_stakeholder_group_id): int(row.count_value)
+            for row in participant_rows
+        }
+        attempts_by_group: dict[str, dict[str, int]] = {}
+        resubmissions_by_group: dict[str, int] = {}
+        for row in attempt_rows:
+            group_id = str(row.session_stakeholder_group_id)
+            attempts_by_group.setdefault(group_id, {})[row.status] = int(
+                row.count_value
+            )
+            resubmissions_by_group[group_id] = resubmissions_by_group.get(
+                group_id, 0
+            ) + int(row.resubmission_count or 0)
+        validations_by_group: dict[str, dict[str | None, int]] = {}
+        for row in validation_rows:
+            validations_by_group.setdefault(
+                str(row.session_stakeholder_group_id),
+                {},
+            )[row.status] = int(row.count_value)
+
+        summaries: list[ProcessingGroupSubmissionSummary] = []
+        for group in groups:
+            group_id = str(group.session_stakeholder_group_id)
+            attempt_counts = attempts_by_group.get(group_id, {})
+            validation_counts = validations_by_group.get(group_id, {})
+            unvalidated = sum(
+                validation_counts.get(status, 0)
+                for status in (
+                    None,
+                    ValidationStatus.PENDING.value,
+                    ValidationStatus.RUNNING.value,
+                )
+            )
+            voting_power = Decimal(group.allocation_units) / Decimal(
+                configuration.allocation_total_units
+            )
+            summaries.append(
+                ProcessingGroupSubmissionSummary(
+                    stakeholder_group_id=group_id,
+                    stakeholder_group_name=group.name,
+                    configured_voting_power=format(
+                        voting_power.normalize(),
+                        "f",
+                    ),
+                    enrolled_count=enrolled_by_group.get(group_id, 0),
+                    submitted_count=attempt_counts.get(
+                        SubmissionStatus.SUBMITTED.value,
+                        0,
+                    ),
+                    valid_count=validation_counts.get(
+                        ValidationStatus.VALID.value,
+                        0,
+                    ),
+                    warned_count=validation_counts.get(
+                        ValidationStatus.VALID_WITH_WARNING.value,
+                        0,
+                    ),
+                    invalid_count=validation_counts.get(
+                        ValidationStatus.INVALID.value,
+                        0,
+                    ),
+                    error_count=validation_counts.get(
+                        ValidationStatus.ERROR.value,
+                        0,
+                    ),
+                    unvalidated_count=unvalidated,
+                    draft_attempt_count=attempt_counts.get(
+                        SubmissionStatus.DRAFT.value,
+                        0,
+                    ),
+                    superseded_attempt_count=attempt_counts.get(
+                        SubmissionStatus.SUPERSEDED.value,
+                        0,
+                    ),
+                    withdrawn_attempt_count=attempt_counts.get(
+                        SubmissionStatus.WITHDRAWN.value,
+                        0,
+                    ),
+                    resubmission_attempt_count=resubmissions_by_group.get(
+                        group_id,
+                        0,
+                    ),
+                )
+            )
+        return ProcessingSubmissionContext(session_id, tuple(summaries))
+
+    def list_processing_sessions(
+        self,
+        *,
+        filters: SessionSearchFilters,
+        mode: ProcessingQueueMode,
+        page: int = 1,
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> PageResult[ProcessingSessionSummary]:
+        _validate_paging(page=page, page_size=page_size)
+        if mode == ProcessingQueueMode.PROCESSED:
+            # No persisted end-to-end package contract exists yet. A successful
+            # weighting artifact is deliberately not treated as workflow completion.
+            return PageResult((), page, page_size, 0)
+        query_filters = _session_filters(
+            session_filters=filters,
+            search=None,
+            status=None,
+            scenario_key=None,
+            timezone=self._timezone,
+        )
+        latest_run_id = (
+            select(ProcessingRunRow.processing_run_id)
+            .where(ProcessingRunRow.session_id == SessionRow.session_id)
+            .order_by(ProcessingRunRow.run_number.desc())
+            .limit(1)
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        latest_run = aliased(ProcessingRunRow)
+        latest_ranking_id = (
+            select(RankingRunRow.ranking_run_id)
+            .where(RankingRunRow.session_id == SessionRow.session_id)
+            .order_by(RankingRunRow.run_number.desc())
+            .limit(1)
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        latest_ranking = aliased(RankingRunRow)
+        successful_count = (
+            select(func.count())
+            .select_from(ProcessingRunRow)
+            .where(
+                ProcessingRunRow.session_id == SessionRow.session_id,
+                ProcessingRunRow.status == RunStatus.SUCCEEDED.value,
+            )
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        latest_successful_run_id = (
+            select(ProcessingRunRow.processing_run_id)
+            .where(
+                ProcessingRunRow.session_id == SessionRow.session_id,
+                ProcessingRunRow.status == RunStatus.SUCCEEDED.value,
+            )
+            .order_by(ProcessingRunRow.run_number.desc())
+            .limit(1)
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        successful_ranking_count = (
+            select(func.count())
+            .select_from(RankingRunRow)
+            .where(
+                RankingRunRow.session_id == SessionRow.session_id,
+                RankingRunRow.status == RunStatus.SUCCEEDED.value,
+            )
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        submission_count = (
+            select(func.count())
+            .select_from(SubmissionRow)
+            .where(
+                SubmissionRow.session_id == SessionRow.session_id,
+                SubmissionRow.status == SubmissionStatus.SUBMITTED.value,
+            )
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        if mode == ProcessingQueueMode.UNPROCESSED:
+            query_filters.extend(
+                (
+                    SessionRow.status == SessionStatus.CLOSED.value,
+                    latest_run_id.is_(None),
+                )
+            )
+        else:
+            query_filters.extend(
+                (
+                    SessionRow.status.in_(
+                        (
+                            SessionStatus.CLOSED.value,
+                            SessionStatus.ARCHIVED.value,
+                        )
+                    ),
+                    latest_run_id.is_not(None),
+                )
+            )
+        if filters.processing_states:
+            state_expressions = {
+                "not_started": latest_run.processing_run_id.is_(None),
+                "active": latest_run.status.in_(
+                    (RunStatus.QUEUED.value, RunStatus.RUNNING.value)
+                ),
+                "awaiting_review": (
+                    latest_run.status == RunStatus.AWAITING_REVIEW.value
+                ),
+                "failed": latest_run.status == RunStatus.FAILED.value,
+                "stale": latest_run.status == RunStatus.STALE.value,
+                "completed": successful_count > 0,
+                "successful_weighting": successful_count > 0,
+                "newer_work": (
+                    (successful_count > 0)
+                    & (latest_run.status != RunStatus.SUCCEEDED.value)
+                ),
+                "successful_ranking": successful_ranking_count > 0,
+            }
+            selected_expressions = tuple(
+                state_expressions[value]
+                for value in filters.processing_states
+                if value in state_expressions
+            )
+            if selected_expressions:
+                query_filters.append(or_(*selected_expressions))
+        base = (
+            select(
+                SessionRow,
+                ScenarioDefinitionRow.title.label("scenario_title"),
+                ScenarioSnapshotRow.declared_version.label("scenario_version"),
+                ScenarioSnapshotRow.status.label("scenario_status"),
+                submission_count.label("effective_submission_count"),
+                successful_count.label("successful_run_count"),
+                latest_run.processing_run_id.label("latest_run_id"),
+                latest_run.run_number.label("latest_run_number"),
+                latest_run.status.label("latest_run_status"),
+                latest_run.created_at.label("latest_run_created_at"),
+                successful_ranking_count.label("successful_ranking_run_count"),
+                latest_ranking.ranking_run_id.label("latest_ranking_run_id"),
+                latest_ranking.run_number.label("latest_ranking_run_number"),
+                latest_ranking.status.label("latest_ranking_run_status"),
+                latest_ranking.completed_at.label("latest_ranking_activity_at"),
+                latest_ranking.roster_hash.label("latest_ranking_roster_hash"),
+                latest_ranking.source_processing_run_id.label(
+                    "latest_ranking_source_processing_run_id"
+                ),
+                latest_successful_run_id.label("latest_successful_run_id"),
+                func.coalesce(
+                    latest_run.completed_at,
+                    latest_run.created_at,
+                    SessionRow.updated_at,
+                ).label("last_processing_activity_at"),
+            )
+            .select_from(SessionRow)
+            .join(ScenarioSnapshotRow)
+            .join(ScenarioDefinitionRow)
+            .outerjoin(
+                latest_run,
+                latest_run.processing_run_id == latest_run_id,
+            )
+            .outerjoin(
+                latest_ranking,
+                latest_ranking.ranking_run_id == latest_ranking_id,
+            )
+            .where(*query_filters)
+        )
+        try:
+            with self._session_factory() as database_session:
+                total = (
+                    database_session.scalar(
+                        select(func.count()).select_from(base.subquery())
+                    )
+                    or 0
+                )
+                rows = database_session.execute(
+                    base.order_by(
+                        SessionRow.closed_at.desc().nullslast(),
+                        SessionRow.title,
+                    )
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                ).all()
+        except SQLAlchemyError as error:
+            raise PageQueryError("Processing sessions could not be loaded.") from error
+
+        items: list[ProcessingSessionSummary] = []
+        for row in rows:
+            overview = self.get_session_validation_overview(
+                str(row.SessionRow.session_id)
+            )
+            blockers = _processing_blockers(row.SessionRow, row, overview)
+            items.append(
+                ProcessingSessionSummary(
+                    session_id=str(row.SessionRow.session_id),
+                    title=row.SessionRow.title,
+                    public_slug=row.SessionRow.public_slug,
+                    status=SessionStatus(row.SessionRow.status),
+                    scenario_title=row.scenario_title,
+                    scenario_version=row.scenario_version,
+                    scenario_status=ScenarioSnapshotStatus(row.scenario_status),
+                    has_active_configuration=(
+                        row.SessionRow.active_configuration_version_id is not None
+                    ),
+                    effective_submission_count=int(row.effective_submission_count),
+                    current_roster_hash=(
+                        None if overview is None else overview.current_roster_hash
+                    ),
+                    latest_run_id=(
+                        None if row.latest_run_id is None else str(row.latest_run_id)
+                    ),
+                    latest_run_number=row.latest_run_number,
+                    latest_run_status=(
+                        None
+                        if row.latest_run_status is None
+                        else RunStatus(row.latest_run_status)
+                    ),
+                    latest_run_created_at=row.latest_run_created_at,
+                    last_processing_activity_at=max(
+                        value
+                        for value in (
+                            row.last_processing_activity_at,
+                            row.latest_ranking_activity_at,
+                        )
+                        if value is not None
+                    ),
+                    latest_run_roster_hash=(
+                        None if overview is None else overview.latest_batch_roster_hash
+                    ),
+                    roster_is_current=(
+                        False if overview is None else overview.roster_is_current
+                    ),
+                    successful_run_count=int(row.successful_run_count),
+                    next_stage=_processing_next_stage(row, overview),
+                    blockers=blockers,
+                    opens_at=row.SessionRow.opens_at,
+                    closes_at=row.SessionRow.closes_at,
+                    created_at=row.SessionRow.created_at,
+                    updated_at=row.SessionRow.updated_at,
+                    latest_ranking_run_id=(
+                        None
+                        if row.latest_ranking_run_id is None
+                        else str(row.latest_ranking_run_id)
+                    ),
+                    latest_ranking_run_number=row.latest_ranking_run_number,
+                    latest_ranking_run_status=(
+                        None
+                        if row.latest_ranking_run_status is None
+                        else RunStatus(row.latest_ranking_run_status)
+                    ),
+                    latest_ranking_activity_at=row.latest_ranking_activity_at,
+                    successful_ranking_run_count=int(row.successful_ranking_run_count),
+                    latest_ranking_roster_hash=row.latest_ranking_roster_hash,
+                    latest_ranking_source_processing_run_id=(
+                        None
+                        if row.latest_ranking_source_processing_run_id is None
+                        else str(row.latest_ranking_source_processing_run_id)
+                    ),
+                )
+            )
+        return PageResult(tuple(items), page, page_size, int(total))
+
+    def list_participant_validation_matrices(
+        self,
+        session_id: str,
+    ) -> tuple[ProcessingMatrixView, ...]:
+        validation = aliased(SubmissionValidationRow)
+        statement = (
+            select(
+                ValidationPreparedMatrixRow,
+                validation.quality_metrics_json.label("diagnostics"),
+                validation.consistency_ratio.label("consistency_ratio"),
+                SubmissionRow,
+                ParticipantRow.alias.label("participant_alias"),
+                SessionStakeholderGroupRow.name.label("group_name"),
+            )
+            .select_from(SubmissionRow)
+            .join(ParticipantRow)
+            .join(SessionStakeholderGroupRow)
+            .join(
+                validation,
+                validation.validation_id
+                == _latest_validation_id(SubmissionRow.submission_id),
+            )
+            .join(
+                ValidationPreparedMatrixRow,
+                ValidationPreparedMatrixRow.validation_id == validation.validation_id,
+            )
+            .where(
+                SubmissionRow.session_id == session_id,
+                SubmissionRow.status == SubmissionStatus.SUBMITTED.value,
+                validation.status.in_(
+                    (
+                        ValidationStatus.VALID.value,
+                        ValidationStatus.VALID_WITH_WARNING.value,
+                    )
+                ),
+            )
+            .order_by(
+                SessionStakeholderGroupRow.name,
+                ParticipantRow.alias,
+                SubmissionRow.participant_id,
+            )
+        )
+        try:
+            with self._session_factory() as database_session:
+                rows = database_session.execute(statement).all()
+                return tuple(
+                    _participant_matrix_view(database_session, row) for row in rows
+                )
+        except SQLAlchemyError as error:
+            raise PageQueryError(
+                "Participant validation matrices could not be loaded."
+            ) from error
+
+    def list_run_matrices(
+        self,
+        processing_run_id: str,
+    ) -> tuple[ProcessingMatrixView, ...]:
+        included_count = (
+            select(func.count())
+            .select_from(ProcessingRunSubmissionRow)
+            .where(
+                ProcessingRunSubmissionRow.processing_run_id
+                == ProcessingMatrixRow.processing_run_id,
+                ProcessingRunSubmissionRow.inclusion_status == "included",
+            )
+            .correlate(ProcessingMatrixRow)
+            .scalar_subquery()
+        )
+        group_included_count = (
+            select(func.count())
+            .select_from(ProcessingRunSubmissionRow)
+            .where(
+                ProcessingRunSubmissionRow.processing_run_id
+                == ProcessingMatrixRow.processing_run_id,
+                ProcessingRunSubmissionRow.stakeholder_group_id
+                == ProcessingMatrixRow.stakeholder_group_id,
+                ProcessingRunSubmissionRow.inclusion_status == "included",
+            )
+            .correlate(ProcessingMatrixRow)
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                ProcessingMatrixRow,
+                SessionStakeholderGroupRow.name.label("group_name"),
+                SessionStakeholderGroupRow.session_stakeholder_group_id.label(
+                    "resolved_group_id"
+                ),
+                SessionStakeholderGroupRow.allocation_units.label("allocation_units"),
+                SubmissionRow.participant_id.label("participant_id"),
+                ParticipantRow.alias.label("participant_alias"),
+                included_count.label("included_count"),
+                group_included_count.label("group_included_count"),
+            )
+            .select_from(ProcessingMatrixRow)
+            .outerjoin(
+                SubmissionValidationRow,
+                SubmissionValidationRow.validation_id
+                == ProcessingMatrixRow.validation_id,
+            )
+            .outerjoin(
+                SubmissionRow,
+                SubmissionRow.submission_id == SubmissionValidationRow.submission_id,
+            )
+            .outerjoin(
+                ParticipantRow,
+                ParticipantRow.participant_id == SubmissionRow.participant_id,
+            )
+            .outerjoin(
+                SessionStakeholderGroupRow,
+                SessionStakeholderGroupRow.session_stakeholder_group_id
+                == func.coalesce(
+                    ProcessingMatrixRow.stakeholder_group_id,
+                    SubmissionRow.session_stakeholder_group_id,
+                ),
+            )
+            .where(ProcessingMatrixRow.processing_run_id == processing_run_id)
+            .order_by(
+                case(
+                    (ProcessingMatrixRow.level == "participant", 0),
+                    (ProcessingMatrixRow.level == "stakeholder_group", 1),
+                    else_=2,
+                ),
+                SessionStakeholderGroupRow.name,
+                ProcessingMatrixRow.processing_matrix_id,
+            )
+        )
+        try:
+            with self._session_factory() as database_session:
+                rows = database_session.execute(statement).all()
+                criterion_ids = {
+                    str(item)
+                    for row in rows
+                    for item in row.ProcessingMatrixRow.criterion_ids_json
+                }
+                labels = _criterion_labels(database_session, criterion_ids)
+        except SQLAlchemyError as error:
+            raise PageQueryError("Run matrices could not be loaded.") from error
+        return tuple(_run_matrix_view(row, labels) for row in rows)
+
+    def list_ranking_results(
+        self,
+        ranking_run_id: str,
+    ) -> tuple[RankingResultView, ...]:
+        statement = (
+            select(
+                RankingResultRow,
+                ParticipantRow.alias.label("participant_alias"),
+                SubmissionRow.participant_id.label("participant_id"),
+                SessionStakeholderGroupRow.name.label("group_name"),
+                SessionStakeholderGroupRow.session_stakeholder_group_id.label(
+                    "resolved_group_id"
+                ),
+            )
+            .select_from(RankingResultRow)
+            .join(
+                ProcessingMatrixRow,
+                ProcessingMatrixRow.processing_matrix_id
+                == RankingResultRow.source_processing_matrix_id,
+            )
+            .outerjoin(
+                SubmissionValidationRow,
+                SubmissionValidationRow.validation_id
+                == ProcessingMatrixRow.validation_id,
+            )
+            .outerjoin(
+                SubmissionRow,
+                SubmissionRow.submission_id == SubmissionValidationRow.submission_id,
+            )
+            .outerjoin(
+                ParticipantRow,
+                ParticipantRow.participant_id == SubmissionRow.participant_id,
+            )
+            .outerjoin(
+                SessionStakeholderGroupRow,
+                SessionStakeholderGroupRow.session_stakeholder_group_id
+                == func.coalesce(
+                    RankingResultRow.stakeholder_group_id,
+                    SubmissionRow.session_stakeholder_group_id,
+                ),
+            )
+            .where(RankingResultRow.ranking_run_id == ranking_run_id)
+            .order_by(
+                case(
+                    (RankingResultRow.level == "participant", 0),
+                    (RankingResultRow.level == "stakeholder_group", 1),
+                    else_=2,
+                ),
+                SessionStakeholderGroupRow.name,
+                RankingResultRow.ranking_result_id,
+            )
+        )
+        try:
+            with self._session_factory() as database_session:
+                rows = database_session.execute(statement).all()
+                alternative_ids = {
+                    str(item["alternative_id"])
+                    for row in rows
+                    for item in json_from_storage(
+                        row.RankingResultRow.alternatives_json
+                    ).get("values", [])
+                    if isinstance(item, Mapping) and "alternative_id" in item
+                }
+                alternative_labels = {
+                    str(alternative_id): name
+                    for alternative_id, name in database_session.execute(
+                        select(
+                            ScenarioAlternativeRow.alternative_id,
+                            ScenarioAlternativeRow.name,
+                        ).where(
+                            ScenarioAlternativeRow.alternative_id.in_(alternative_ids)
+                        )
+                    )
+                }
+                views = tuple(
+                    _ranking_result_view(row, alternative_labels) for row in rows
+                )
+        except (SQLAlchemyError, ValueError, TypeError) as error:
+            raise PageQueryError("Ranking results could not be loaded.") from error
+        return views
 
     def list_active_algorithm_implementations(
         self,
@@ -1906,6 +2772,50 @@ class SqlAlchemyPageQueries(PageQueries):
                 library_version=row.library_version,
             )
             for row in rows
+        )
+
+    def get_session_algorithm_configuration(
+        self,
+        session_id: str,
+        role: AlgorithmRole,
+    ) -> ConfiguredAlgorithmSummary | None:
+        statement = (
+            select(SessionAlgorithmConfigRow, AlgorithmImplementationRow)
+            .join(
+                AlgorithmImplementationRow,
+                AlgorithmImplementationRow.algorithm_implementation_id
+                == SessionAlgorithmConfigRow.algorithm_implementation_id,
+            )
+            .where(
+                SessionAlgorithmConfigRow.configuration_version_id
+                == select(SessionRow.active_configuration_version_id)
+                .where(SessionRow.session_id == session_id)
+                .scalar_subquery(),
+                SessionAlgorithmConfigRow.role == role.value,
+            )
+            .order_by(SessionAlgorithmConfigRow.execution_order)
+            .limit(1)
+        )
+        try:
+            with self._session_factory() as database_session:
+                row = database_session.execute(statement).first()
+        except SQLAlchemyError as error:
+            raise PageQueryError(
+                "Configured session algorithm could not be loaded."
+            ) from error
+        if row is None:
+            return None
+        config = row.SessionAlgorithmConfigRow
+        implementation = row.AlgorithmImplementationRow
+        return ConfiguredAlgorithmSummary(
+            algorithm_implementation_id=str(implementation.algorithm_implementation_id),
+            stable_key=implementation.stable_key,
+            role=AlgorithmRole(config.role),
+            conceptual_method=implementation.conceptual_method,
+            provider=implementation.provider,
+            library_name=implementation.library_name,
+            library_version=implementation.library_version,
+            parameters=dict(config.parameter_json),
         )
 
     def list_admin_audit_events(
@@ -2474,12 +3384,21 @@ _VALIDATION_ATTENTION_STATUSES = (
 
 def _session_filters(
     *,
+    session_filters: SessionSearchFilters | None = None,
     search: str | None,
     status: SessionStatus | None,
     scenario_key: str | None,
+    timezone: ZoneInfo | None = None,
 ) -> list[Any]:
-    normalized_search = search.strip() if search is not None else ""
-    normalized_scenario = scenario_key.strip() if scenario_key is not None else ""
+    normalized_search = (
+        session_filters.search
+        if session_filters is not None
+        else (search.strip() if search is not None else "")
+    )
+    selected_scenario = (
+        session_filters.scenario_key if session_filters is not None else scenario_key
+    )
+    normalized_scenario = selected_scenario.strip() if selected_scenario else ""
     filters: list[Any] = []
     if normalized_search:
         escaped = _escape_like(normalized_search.casefold())
@@ -2488,12 +3407,51 @@ def _session_filters(
             or_(
                 func.lower(SessionRow.title).like(pattern, escape="\\"),
                 func.lower(SessionRow.public_slug).like(pattern, escape="\\"),
+                func.lower(ScenarioDefinitionRow.title).like(pattern, escape="\\"),
+                func.lower(ScenarioSnapshotRow.title).like(pattern, escape="\\"),
             )
         )
-    if status is not None:
+    if session_filters is not None and session_filters.statuses:
+        filters.append(
+            SessionRow.status.in_(
+                tuple(item.value for item in session_filters.statuses)
+            )
+        )
+    elif status is not None:
         filters.append(SessionRow.status == status.value)
     if normalized_scenario:
         filters.append(ScenarioDefinitionRow.scenario_key == normalized_scenario)
+    if session_filters is not None and session_filters.domain:
+        filters.append(
+            or_(
+                ScenarioDefinitionRow.domain == session_filters.domain,
+                ScenarioSnapshotRow.domain == session_filters.domain,
+            )
+        )
+    if session_filters is not None and (
+        session_filters.date_from is not None or session_filters.date_to is not None
+    ):
+        query_timezone = timezone or ZoneInfo("UTC")
+        date_column = {
+            SessionDateField.CREATED: SessionRow.created_at,
+            SessionDateField.OPENS: SessionRow.opens_at,
+            SessionDateField.CLOSES: SessionRow.closes_at,
+            SessionDateField.UPDATED: SessionRow.updated_at,
+        }[session_filters.date_field]
+        if session_filters.date_from is not None:
+            start = datetime.combine(
+                session_filters.date_from,
+                time.min,
+                tzinfo=query_timezone,
+            ).astimezone(UTC)
+            filters.append(date_column >= start)
+        if session_filters.date_to is not None:
+            end = datetime.combine(
+                session_filters.date_to + timedelta(days=1),
+                time.min,
+                tzinfo=query_timezone,
+            ).astimezone(UTC)
+            filters.append(date_column < end)
     return filters
 
 
@@ -2882,9 +3840,7 @@ def _authored_answer_detail(row: Any) -> AuthoredAnswerDetail:
         answered_at=answer.answered_at,
         response_time_ms=answer.response_time_ms,
         normalized_value=(
-            normalized_value
-            if isinstance(normalized_value, Mapping)
-            else None
+            normalized_value if isinstance(normalized_value, Mapping) else None
         ),
         normalized_crisp_value=_decimal_text(row.normalized_crisp_value),
         normalizer_version=row.normalizer_version,
@@ -2981,7 +3937,7 @@ def _latest_validation_id(submission_id: Any):
         select(SubmissionValidationRow.validation_id)
         .where(SubmissionValidationRow.submission_id == submission_id)
         .order_by(
-            SubmissionValidationRow.completed_at.desc().nullslast(),
+            SubmissionValidationRow.attempt_number.desc(),
             SubmissionValidationRow.validation_id.desc(),
         )
         .limit(1)
@@ -2990,17 +3946,329 @@ def _latest_validation_id(submission_id: Any):
     )
 
 
-def _latest_review_id(submission_id: Any):
+def _latest_review_id(
+    submission_id: Any,
+    validation_id: Any,
+    validation_source: Any,
+):
     return (
         select(SubmissionReviewDecisionRow.decision_id)
-        .where(SubmissionReviewDecisionRow.submission_id == submission_id)
+        .where(
+            SubmissionReviewDecisionRow.submission_id == submission_id,
+            SubmissionReviewDecisionRow.validation_id == validation_id,
+        )
         .order_by(
             SubmissionReviewDecisionRow.decided_at.desc(),
             SubmissionReviewDecisionRow.decision_id.desc(),
         )
         .limit(1)
-        .correlate(SubmissionRow)
+        .correlate(SubmissionRow, validation_source)
         .scalar_subquery()
+    )
+
+
+def _processing_blockers(
+    session_row: SessionRow,
+    row: Any,
+    overview: SessionValidationOverview | None,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if session_row.status != SessionStatus.CLOSED.value:
+        blockers.append("session.not_closed")
+    if session_row.active_configuration_version_id is None:
+        blockers.append("configuration.missing")
+    if row.scenario_status != ScenarioSnapshotStatus.READY.value:
+        blockers.append("scenario.not_ready")
+    if int(row.effective_submission_count) == 0:
+        blockers.append("roster.empty")
+    if overview is not None:
+        if overview.active_count:
+            blockers.append("validation.active")
+        if overview.unvalidated_count:
+            blockers.append("validation.missing")
+        if overview.warning_decisions_required:
+            blockers.append("validation.review_required")
+    if getattr(row, "latest_ranking_run_status", None) == RunStatus.FAILED.value:
+        blockers.append("ranking.failed")
+    if (
+        getattr(row, "latest_ranking_run_status", None) == RunStatus.SUCCEEDED.value
+        and overview is not None
+        and (
+            getattr(row, "latest_ranking_roster_hash", None)
+            != overview.current_roster_hash
+            or getattr(row, "latest_ranking_source_processing_run_id", None)
+            != getattr(row, "latest_successful_run_id", None)
+        )
+    ):
+        blockers.append("ranking.stale")
+    return tuple(blockers)
+
+
+def _processing_next_stage(
+    row: Any,
+    overview: SessionValidationOverview | None,
+) -> str:
+    if (
+        row.SessionRow.status != SessionStatus.CLOSED.value
+        or row.SessionRow.active_configuration_version_id is None
+        or row.scenario_status != ScenarioSnapshotStatus.READY.value
+        or int(row.effective_submission_count) == 0
+    ):
+        return "session_validation"
+    if (
+        getattr(row, "latest_ranking_run_status", None) == RunStatus.SUCCEEDED.value
+        and overview is not None
+        and getattr(row, "latest_ranking_roster_hash", None)
+        == overview.current_roster_hash
+        and getattr(row, "latest_ranking_source_processing_run_id", None)
+        == getattr(row, "latest_successful_run_id", None)
+    ):
+        return "sensitivity_and_robustness"
+    if row.latest_run_status == RunStatus.SUCCEEDED.value:
+        return "create_ranking"
+    if (
+        row.latest_run_status == RunStatus.AWAITING_REVIEW.value
+        and overview is not None
+        and overview.validation_complete
+    ):
+        return "weight_generation"
+    return "submission_validation"
+
+
+def _ranking_result_view(
+    row: Any,
+    alternative_labels: Mapping[str, str],
+) -> RankingResultView:
+    result = row.RankingResultRow
+    stored = json_from_storage(result.alternatives_json).get("values", [])
+    alternatives: list[RankingAlternativeView] = []
+    for item in stored:
+        if not isinstance(item, Mapping):
+            continue
+        alternative_id = str(item.get("alternative_id", ""))
+        metrics = item.get("method_metrics", {})
+        alternatives.append(
+            RankingAlternativeView(
+                alternative_id=alternative_id,
+                alternative_label=alternative_labels.get(
+                    alternative_id, alternative_id
+                ),
+                rank=int(item.get("rank", 0)),
+                preference_value=str(item.get("preference_value", "")),
+                method_metrics=(metrics if isinstance(metrics, Mapping) else {}),
+            )
+        )
+    participant_label = None
+    if result.level == "participant":
+        participant_label = row.participant_alias or (
+            f"Participant {str(row.participant_id)[-8:]}"
+            if row.participant_id is not None
+            else "Participant"
+        )
+        label = (
+            f"{participant_label} · {row.group_name}"
+            if row.group_name
+            else participant_label
+        )
+    elif result.level == "stakeholder_group":
+        label = f"{row.group_name or 'Stakeholder group'} aggregate"
+    else:
+        label = "Session aggregate"
+    return RankingResultView(
+        ranking_result_id=str(result.ranking_result_id),
+        ranking_run_id=str(result.ranking_run_id),
+        source_processing_matrix_id=str(result.source_processing_matrix_id),
+        level=result.level,
+        label=label,
+        participant_label=participant_label,
+        stakeholder_group_id=(
+            str(row.resolved_group_id) if row.resolved_group_id is not None else None
+        ),
+        stakeholder_group_label=row.group_name,
+        validation_id=(
+            str(result.validation_id)
+            if result.level == "participant" and result.validation_id is not None
+            else None
+        ),
+        metric_label=result.metric_label,
+        alternatives=tuple(alternatives),
+        diagnostics=json_from_storage(result.diagnostics_json),
+        result_hash=result.result_hash,
+    )
+
+
+def _criterion_labels(
+    database_session: DatabaseSession,
+    criterion_ids: set[str],
+) -> dict[str, str]:
+    if not criterion_ids:
+        return {}
+    rows = database_session.execute(
+        select(ScenarioCriterionRow.criterion_id, ScenarioCriterionRow.name).where(
+            ScenarioCriterionRow.criterion_id.in_(criterion_ids)
+        )
+    ).all()
+    return {str(row.criterion_id): row.name for row in rows}
+
+
+def _matrix_values(matrix_json: Mapping[str, object]) -> tuple[tuple[str, ...], ...]:
+    raw_values = matrix_json.get("values", ())
+    if not isinstance(raw_values, Sequence) or isinstance(raw_values, str):
+        return ()
+    values: list[tuple[str, ...]] = []
+    for raw_row in raw_values:
+        if not isinstance(raw_row, Sequence) or isinstance(raw_row, str):
+            return ()
+        values.append(tuple(str(value) for value in raw_row))
+    return tuple(values)
+
+
+def _weight_values(
+    criterion_ids: tuple[str, ...],
+    weights_json: Mapping[str, object],
+) -> tuple[str | None, ...]:
+    raw_values = weights_json.get("values", ())
+    by_criterion: dict[str, str] = {}
+    if isinstance(raw_values, Sequence) and not isinstance(raw_values, str):
+        for item in raw_values:
+            if not isinstance(item, Mapping):
+                continue
+            criterion_id = str(item.get("criterion_id", ""))
+            value = item.get("weight")
+            if value is None:
+                value = item.get("middle")
+            if criterion_id and value is not None:
+                by_criterion[criterion_id] = str(value)
+    return tuple(by_criterion.get(criterion_id) for criterion_id in criterion_ids)
+
+
+def _participant_matrix_view(
+    database_session: DatabaseSession,
+    row: Any,
+) -> ProcessingMatrixView:
+    prepared = row.ValidationPreparedMatrixRow
+    prepared_matrix_json = json_from_storage(prepared.matrix_json)
+    criterion_ids = tuple(str(item) for item in prepared.criterion_ids_json)
+    labels = _criterion_labels(database_session, set(criterion_ids))
+    weight_rows = (
+        database_session.execute(
+            select(ParticipantCriterionWeightRow).where(
+                ParticipantCriterionWeightRow.validation_id == prepared.validation_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    weights_by_criterion = {
+        str(item.criterion_id): (
+            _decimal_text(item.crisp_weight) or _decimal_text(item.fuzzy_middle)
+        )
+        for item in weight_rows
+    }
+    normalized_rows = database_session.scalars(
+        select(ValidationNormalizedAnswerRow).where(
+            ValidationNormalizedAnswerRow.validation_id == prepared.validation_id
+        )
+    ).all()
+    warnings = tuple(
+        database_session.scalars(
+            select(ValidationMessageRow.code)
+            .where(
+                ValidationMessageRow.validation_id == prepared.validation_id,
+                ValidationMessageRow.severity == "warning",
+            )
+            .order_by(ValidationMessageRow.display_order)
+        ).all()
+    )
+    diagnostics = json_from_storage(row.diagnostics or {})
+    if row.consistency_ratio is not None:
+        diagnostics["consistency_ratio"] = str(row.consistency_ratio)
+    participant_label = _participant_label(
+        row.SubmissionRow.participant_id,
+        row.participant_alias,
+    )
+    return ProcessingMatrixView(
+        matrix_id=str(prepared.validation_id),
+        level="participant",
+        label=f"{participant_label} · {row.group_name}",
+        participant_label=participant_label,
+        stakeholder_group_id=str(row.SubmissionRow.session_stakeholder_group_id),
+        stakeholder_group_label=row.group_name,
+        validation_id=str(prepared.validation_id),
+        criterion_ids=criterion_ids,
+        criterion_labels=tuple(labels.get(item, item) for item in criterion_ids),
+        values=_matrix_values(prepared_matrix_json),
+        weights=tuple(weights_by_criterion.get(item) for item in criterion_ids),
+        diagnostics=diagnostics,
+        normalized_answers=tuple(
+            json_from_storage(item.normalized_value_json) for item in normalized_rows
+        ),
+        matrix_hash=prepared.matrix_hash,
+        warnings=warnings,
+    )
+
+
+def _run_matrix_view(
+    row: Any,
+    labels: Mapping[str, str],
+) -> ProcessingMatrixView:
+    matrix = row.ProcessingMatrixRow
+    matrix_json = json_from_storage(matrix.matrix_json)
+    weights_json = json_from_storage(matrix.weights_json)
+    diagnostics_json = json_from_storage(matrix.diagnostics_json)
+    criterion_ids = tuple(str(item) for item in matrix.criterion_ids_json)
+    participant_label = (
+        None
+        if row.participant_id is None
+        else _participant_label(row.participant_id, row.participant_alias)
+    )
+    level_label = {
+        "participant": (
+            f"{participant_label} · {row.group_name}"
+            if participant_label is not None
+            else "Participant matrix"
+        ),
+        "stakeholder_group": row.group_name or "Stakeholder group matrix",
+        "session": "Session aggregate matrix",
+    }.get(matrix.level, matrix.level.replace("_", " ").title())
+    return ProcessingMatrixView(
+        matrix_id=str(matrix.processing_matrix_id),
+        level=matrix.level,
+        label=level_label,
+        participant_label=participant_label,
+        stakeholder_group_id=(
+            None if row.resolved_group_id is None else str(row.resolved_group_id)
+        ),
+        stakeholder_group_label=row.group_name,
+        validation_id=(
+            None if matrix.validation_id is None else str(matrix.validation_id)
+        ),
+        criterion_ids=criterion_ids,
+        criterion_labels=tuple(labels.get(item, item) for item in criterion_ids),
+        values=_matrix_values(matrix_json),
+        weights=_weight_values(criterion_ids, weights_json),
+        diagnostics=diagnostics_json,
+        normalized_answers=(),
+        matrix_hash=matrix.matrix_hash,
+        warnings=(
+            ("consistency.threshold_exceeded",)
+            if diagnostics_json.get("threshold_exceeded")
+            else ()
+        ),
+        participant_count=(
+            1
+            if matrix.level == "participant"
+            else int(
+                row.group_included_count
+                if matrix.level == "stakeholder_group"
+                else row.included_count
+            )
+        ),
+        voting_power=(
+            None
+            if row.allocation_units is None
+            else str(Decimal(row.allocation_units) / Decimal(10_000))
+        ),
     )
 
 

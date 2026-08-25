@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from poli_insight.application.ports.unit_of_work import UnitOfWork
 from poli_insight.application.ports.validator import (
@@ -13,6 +13,7 @@ from poli_insight.application.ports.validator import (
     ValidatorContractViolation,
     ValidatorExecutionError,
     ValidatorMetadata,
+    ValidatorRegistry,
 )
 from poli_insight.core.ids import new_id
 from poli_insight.core.time import utc_now
@@ -40,7 +41,6 @@ from poli_insight.domain.validation import (
     ValidationRuleViolation,
 )
 
-
 UnitOfWorkFactory = Callable[[], UnitOfWork]
 Clock = Callable[[], datetime]
 IdFactory = Callable[[], str]
@@ -53,6 +53,10 @@ _CONTRACT_FAILURE_DETAIL = (
 _UNEXPECTED_FAILURE_DETAIL = (
     "The validator could not complete because of an unexpected execution "
     "error."
+)
+_INTERRUPTED_FAILURE_CODE = "validator.interrupted"
+_INTERRUPTED_FAILURE_DETAIL = (
+    "A previous validation attempt stopped before producing a terminal result."
 )
 
 
@@ -114,6 +118,7 @@ class _PreparedValidation:
     request: ValidationRequest
     submission: Submission
     metadata: ValidatorMetadata
+    validator: Validator
 
 
 class ValidateSubmission:
@@ -122,15 +127,19 @@ class ValidateSubmission:
     def __init__(
         self,
         unit_of_work_factory: UnitOfWorkFactory,
-        validator: Validator,
+        validator: Validator | ValidatorRegistry,
         *,
         clock: Clock = utc_now,
         id_factory: IdFactory = lambda: str(new_id()),
+        stale_after: timedelta = timedelta(minutes=30),
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._validator = validator
         self._clock = clock
         self._id_factory = id_factory
+        if stale_after <= timedelta(0):
+            raise ValueError("stale_after must be positive.")
+        self._stale_after = stale_after
 
     def execute(
         self,
@@ -156,7 +165,6 @@ class ValidateSubmission:
     ) -> _PreparedValidation | SubmissionValidation:
         started_at = self._clock()
         validation_id = self._id_factory()
-        metadata = self._validator.metadata
 
         with self._unit_of_work_factory() as unit_of_work:
             submission = unit_of_work.submissions.get_for_update(
@@ -177,10 +185,14 @@ class ValidateSubmission:
                 session,
                 submission,
             )
-            algorithm_config = _validation_algorithm(
+            algorithm_config = _weighting_algorithm(
                 configuration,
                 command.session_algorithm_config_id,
             )
+            validator = self._resolve_validator(
+                algorithm_config.algorithm_implementation_id
+            )
+            metadata = validator.metadata
             snapshot = unit_of_work.scenarios.get_by_id(
                 configuration.scenario_snapshot_id
             )
@@ -200,15 +212,6 @@ class ValidateSubmission:
                     validator_version=metadata.validator_version,
                     parameter_json=algorithm_config.parameter_json,
                 )
-                running = pending.start(at=started_at)
-                request = ValidationRequest(
-                    validation=running,
-                    submission=submission,
-                    configuration=configuration,
-                    scenario_snapshot=snapshot,
-                    algorithm_config=algorithm_config,
-                )
-                request.ensure_compatible(metadata)
             except (
                 SessionRuleViolation,
                 SubmissionRuleViolation,
@@ -217,23 +220,86 @@ class ValidateSubmission:
             ) as error:
                 raise ValidateSubmissionError(str(error)) from error
 
-            existing = unit_of_work.validations.get_by_input_identity(
-                submission_id=running.submission_id,
-                answers_hash=running.answers_hash,
-                configuration_hash=running.configuration_hash,
+            attempts = unit_of_work.validations.list_by_input_identity(
+                submission_id=pending.submission_id,
+                answers_hash=pending.answers_hash,
+                configuration_hash=pending.configuration_hash,
                 validator_implementation_id=(
-                    running.validator_implementation_id
+                    pending.validator_implementation_id
                 ),
-                validator_version=running.validator_version,
-                parameter_hash=running.parameter_hash,
+                validator_version=pending.validator_version,
+                parameter_hash=pending.parameter_hash,
             )
-            if existing is not None:
-                if existing.is_terminal:
-                    return existing
-                raise ValidateSubmissionError(
-                    "An equivalent validation attempt is already pending or "
-                    "running."
+            reusable = next(
+                (
+                    item
+                    for item in reversed(attempts)
+                    if item.status
+                    in {
+                        ValidationStatus.VALID,
+                        ValidationStatus.VALID_WITH_WARNING,
+                        ValidationStatus.INVALID,
+                    }
+                ),
+                None,
+            )
+            if reusable is not None:
+                return reusable
+            active = next((item for item in attempts if not item.is_terminal), None)
+            if active is not None:
+                if (
+                    active.status != ValidationStatus.RUNNING
+                    or active.started_at is None
+                    or active.started_at > started_at - self._stale_after
+                ):
+                    raise ValidateSubmissionError(
+                        "An equivalent validation attempt is already pending or "
+                        "running."
+                    )
+                interrupted = active.fail(
+                    failure_code=_INTERRUPTED_FAILURE_CODE,
+                    failure_detail=_INTERRUPTED_FAILURE_DETAIL,
+                    actor_type=command.actor_type,
+                    actor_id=command.actor_id,
+                    at=started_at,
+                    quality_metrics_json={"retryable": True},
                 )
+                unit_of_work.validations.save(interrupted)
+                unit_of_work.audit_events.add(
+                    _build_validated_event(
+                        before=active,
+                        after=interrupted,
+                        submission=submission,
+                        metadata=metadata,
+                        command=command,
+                        retryable=True,
+                        event_id=self._id_factory(),
+                    )
+                )
+            if attempts:
+                pending = SubmissionValidation.for_submission(
+                    validation_id=validation_id,
+                    submission=submission,
+                    configuration=configuration,
+                    validator_implementation_id=(
+                        algorithm_config.algorithm_implementation_id
+                    ),
+                    validator_version=metadata.validator_version,
+                    parameter_json=algorithm_config.parameter_json,
+                    attempt_number=max(item.attempt_number for item in attempts) + 1,
+                )
+            running = pending.start(at=started_at)
+            request = ValidationRequest(
+                validation=running,
+                submission=submission,
+                configuration=configuration,
+                scenario_snapshot=snapshot,
+                algorithm_config=algorithm_config,
+            )
+            try:
+                request.ensure_compatible(metadata)
+            except ValidatorContractViolation as error:
+                raise ValidateSubmissionError(str(error)) from error
 
             unit_of_work.validations.add(running)
             unit_of_work.commit()
@@ -243,6 +309,7 @@ class ValidateSubmission:
             request=request,
             submission=submission,
             metadata=metadata,
+            validator=validator,
         )
 
     def _execute_validator(
@@ -255,7 +322,7 @@ class ValidateSubmission:
             raise AssertionError("Running validation is missing started_at.")
 
         try:
-            execution_result = self._validator.validate(prepared.request)
+            execution_result = prepared.validator.validate(prepared.request)
         except ValidatorExecutionError as error:
             completed_at = _not_before(self._clock(), started_at)
             return (
@@ -281,7 +348,7 @@ class ValidateSubmission:
                 ),
                 False,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - provider details must not escape
             completed_at = _not_before(self._clock(), started_at)
             return (
                 prepared.validation.fail(
@@ -350,6 +417,13 @@ class ValidateSubmission:
             )
             unit_of_work.commit()
 
+    def _resolve_validator(self, implementation_id: str) -> Validator:
+        resolver = getattr(self._validator, "for_implementation", None)
+        if callable(resolver):
+            resolved = resolver(implementation_id)
+            return resolved
+        return self._validator  # type: ignore[return-value]
+
 
 def _require_submitted_attempt(submission: Submission) -> None:
     if submission.status == SubmissionStatus.DRAFT:
@@ -373,7 +447,7 @@ def _require_submitted_attempt(submission: Submission) -> None:
 def _not_before(value: datetime, minimum: datetime) -> datetime:
     """Protect terminal evidence from a wall-clock adjustment during work."""
 
-    return minimum if value < minimum else value
+    return max(value, minimum)
 
 
 def _configuration_for_submission(
@@ -404,7 +478,7 @@ def _configuration_for_submission(
     return configuration
 
 
-def _validation_algorithm(
+def _weighting_algorithm(
     configuration: SessionConfigurationVersion,
     algorithm_config_id: str,
 ) -> SessionAlgorithmConfig:
@@ -421,9 +495,9 @@ def _validation_algorithm(
             "The requested validation algorithm is outside the frozen "
             "configuration."
         )
-    if algorithm.role != AlgorithmRole.VALIDATION:
+    if algorithm.role != AlgorithmRole.WEIGHTING:
         raise ValidateSubmissionError(
-            "The requested algorithm configuration is not a validator."
+            "The requested algorithm configuration is not a weighting method."
         )
     return algorithm
 

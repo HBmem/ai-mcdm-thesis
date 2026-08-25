@@ -7,8 +7,9 @@ not expose answer-row CRUD or transaction control.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Protocol
 
 from poli_insight.domain.enum import SubmissionStatus
 from poli_insight.domain.submission import Submission
@@ -161,6 +162,13 @@ class SubmissionRepository(Protocol):
         configuration_version_id: str,
     ) -> Sequence[Submission]:
         """Load all attempts in ascending attempt-number order."""
+        ...
+
+    def list_effective_for_configuration(
+        self,
+        configuration_version_id: str,
+    ) -> Sequence[Submission]:
+        """Load every current submitted attempt for one configuration."""
         ...
 
     def lock_attempt_plan(

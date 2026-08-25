@@ -55,6 +55,11 @@ class ReviewSubmissionCommand:
                 raise ReviewSubmissionError(f"{field_name} cannot be empty.")
         if self.reviewer_notes is not None and not self.reviewer_notes.strip():
             raise ReviewSubmissionError("Reviewer notes cannot be blank when provided.")
+        if (
+            self.status == SubmissionReviewStatus.REJECTED
+            and self.reviewer_notes is None
+        ):
+            raise ReviewSubmissionError("Rejected submissions require reviewer notes.")
 
 
 class ReviewSubmission:
@@ -83,11 +88,6 @@ class ReviewSubmission:
                 submission.submission_id,
                 for_update=True,
             )
-            try:
-                validate_review_transition(previous, command.status)
-            except OperationalRuleViolation as error:
-                raise ReviewSubmissionError(str(error)) from error
-
             validation_id = command.validation_id
             validation = None
             if validation_id is not None:
@@ -99,7 +99,10 @@ class ReviewSubmission:
                     raise ReviewSubmissionError(
                         "The selected validation does not belong to this submission."
                     )
-            elif command.status == SubmissionReviewStatus.ACCEPTED:
+            elif command.status in {
+                SubmissionReviewStatus.ACCEPTED,
+                SubmissionReviewStatus.REJECTED,
+            }:
                 attempts = unit_of_work.validations.list_for_submission(
                     submission.submission_id
                 )
@@ -116,6 +119,23 @@ class ReviewSubmission:
                     else None
                 )
                 validation_id = None if validation is None else validation.validation_id
+
+            # Review finality applies to one immutable validation result. A
+            # later validation has different evidence and requires a fresh
+            # decision when it contains warnings.
+            previous_for_validation = (
+                previous
+                if previous is not None
+                and previous.validation_id == validation_id
+                else None
+            )
+            try:
+                validate_review_transition(
+                    previous_for_validation,
+                    command.status,
+                )
+            except OperationalRuleViolation as error:
+                raise ReviewSubmissionError(str(error)) from error
 
             if command.status == SubmissionReviewStatus.ACCEPTED and (
                 validation is None or not validation.is_usable_for_processing

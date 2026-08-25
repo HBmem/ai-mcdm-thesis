@@ -26,11 +26,10 @@ from poli_insight.domain.enum import (
 from poli_insight.domain.session import SessionConfigurationVersion
 from poli_insight.domain.submission import Submission
 
-
 JsonObject = Mapping[str, Any]
 VALIDATION_INPUT_SCHEMA_VERSION = 1
 VALIDATION_OUTPUT_SCHEMA_VERSION = 1
-EXPECTED_WEIGHT_TOTAL = Decimal("1")
+EXPECTED_WEIGHT_TOTAL = Decimal(1)
 WEIGHT_TOTAL_TOLERANCE = Decimal("1e-9")
 
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -254,6 +253,99 @@ class ValidationNormalizedAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class ValidationPreparedMatrix:
+    """Provider-neutral matrix derived from one immutable submission."""
+
+    validation_id: str
+    response_format: str
+    value_shape: str
+    criterion_ids: tuple[str, ...]
+    matrix_json: JsonObject
+    preparer_version: str
+    matrix_hash: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.validation_id, "Prepared matrix validation ID")
+        if self.response_format not in {"direct_rating", "pairwise"}:
+            raise ValidationRuleViolation(
+                "Prepared matrix response format must be direct_rating or pairwise."
+            )
+        if self.value_shape not in {"crisp", "triangular_fuzzy"}:
+            raise ValidationRuleViolation(
+                "Prepared matrix value shape must be crisp or triangular_fuzzy."
+            )
+        _require_text(self.preparer_version, "Prepared matrix preparer version")
+        _require_sha256(self.matrix_hash, "Prepared matrix hash")
+        if not self.criterion_ids:
+            raise ValidationRuleViolation(
+                "Prepared matrix requires at least one criterion."
+            )
+        _require_unique(self.criterion_ids, "Prepared matrix criterion IDs")
+        for criterion_id in self.criterion_ids:
+            _require_text(criterion_id, "Prepared matrix criterion ID")
+        _validate_json(self.matrix_json, "Prepared matrix values")
+        values = self.matrix_json.get("values")
+        if not isinstance(values, (list, tuple)) or len(values) != len(
+            self.criterion_ids
+        ):
+            raise ValidationRuleViolation(
+                "Prepared matrix must contain one row per criterion."
+            )
+        if any(
+            not isinstance(row, (list, tuple))
+            or len(row) != len(self.criterion_ids)
+            for row in values
+        ):
+            raise ValidationRuleViolation(
+                "Prepared matrix must be square and match criterion order."
+            )
+        if self.matrix_hash != hash_json(self._unhashed_manifest()):
+            raise ValidationRuleViolation(
+                "Prepared matrix values do not match matrix_hash."
+            )
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        validation_id: str,
+        response_format: str,
+        value_shape: str,
+        criterion_ids: tuple[str, ...],
+        matrix_json: JsonObject,
+        preparer_version: str,
+    ) -> Self:
+        unhashed = {
+            "response_format": response_format,
+            "value_shape": value_shape,
+            "criterion_ids": list(criterion_ids),
+            "matrix": dict(matrix_json),
+            "preparer_version": preparer_version,
+        }
+        return cls(
+            validation_id=validation_id,
+            response_format=response_format,
+            value_shape=value_shape,
+            criterion_ids=criterion_ids,
+            matrix_json=_copy_json(matrix_json),
+            preparer_version=preparer_version,
+            matrix_hash=hash_json(unhashed),
+        )
+
+    def _unhashed_manifest(self) -> dict[str, object]:
+        return {
+            "response_format": self.response_format,
+            "value_shape": self.value_shape,
+            "criterion_ids": list(self.criterion_ids),
+            "matrix": dict(self.matrix_json),
+            "preparer_version": self.preparer_version,
+        }
+
+    def to_manifest(self) -> dict[str, object]:
+        return {**self._unhashed_manifest(), "matrix_hash": self.matrix_hash}
+
+
+@dataclass(frozen=True, slots=True)
 class ParticipantCriterionWeight:
     """One normalized crisp or triangular-fuzzy criterion weight."""
 
@@ -341,8 +433,9 @@ class SubmissionValidation:
     parameter_hash: str
     status: ValidationStatus
     input_hash: str
+    attempt_number: int = 1
 
-    completion_ratio: Decimal = Decimal("0")
+    completion_ratio: Decimal = Decimal(0)
     consistency_ratio: Decimal | None = None
     quality_metrics_json: JsonObject = field(default_factory=dict)
     started_at: datetime | None = None
@@ -356,6 +449,7 @@ class SubmissionValidation:
     normalized_answers: tuple[ValidationNormalizedAnswer, ...] = field(
         default_factory=tuple
     )
+    prepared_matrix: ValidationPreparedMatrix | None = None
     criterion_weights: tuple[ParticipantCriterionWeight, ...] = field(
         default_factory=tuple
     )
@@ -379,6 +473,7 @@ class SubmissionValidation:
         validator_implementation_id: str,
         validator_version: str,
         parameter_json: JsonObject,
+        attempt_number: int = 1,
     ) -> Self:
         """Create a pending attempt and freeze its complete input identity."""
 
@@ -405,6 +500,7 @@ class SubmissionValidation:
             parameter_hash=parameter_hash,
             status=ValidationStatus.PENDING,
             input_hash=input_hash,
+            attempt_number=attempt_number,
         )
 
     @classmethod
@@ -417,6 +513,7 @@ class SubmissionValidation:
         validator_implementation_id: str,
         validator_version: str,
         parameter_json: JsonObject,
+        attempt_number: int = 1,
     ) -> Self:
         """Create a pending attempt bound to verified immutable inputs."""
 
@@ -434,6 +531,7 @@ class SubmissionValidation:
             validator_implementation_id=validator_implementation_id,
             validator_version=validator_version,
             parameter_json=parameter_json,
+            attempt_number=attempt_number,
         )
 
     @property
@@ -442,10 +540,40 @@ class SubmissionValidation:
 
     @property
     def is_usable_for_processing(self) -> bool:
-        return self.status in {
+        status_usable = self.status in {
             ValidationStatus.VALID,
             ValidationStatus.VALID_WITH_WARNING,
         }
+        if not status_usable or self.completion_ratio != EXPECTED_WEIGHT_TOTAL:
+            return False
+        # Existing schema-v1 evidence predates persisted matrices. New
+        # validation pipelines opt into the stricter contract explicitly.
+        if not self.quality_metrics_json.get("prepared_matrix_required", False):
+            return True
+        if self.prepared_matrix is None or not self.criterion_weights:
+            return False
+        criterion_ids = set(self.prepared_matrix.criterion_ids)
+        if {
+            weight.criterion_id for weight in self.criterion_weights
+        } != criterion_ids:
+            return False
+        crisp_weights = tuple(
+            weight.crisp_weight for weight in self.criterion_weights
+        )
+        if all(weight is not None for weight in crisp_weights):
+            return abs(
+                sum(
+                    (weight for weight in crisp_weights if weight is not None),
+                    Decimal(0),
+                )
+                - EXPECTED_WEIGHT_TOTAL
+            ) <= WEIGHT_TOTAL_TOLERANCE
+        return all(
+            weight.fuzzy_lower is not None
+            and weight.fuzzy_middle is not None
+            and weight.fuzzy_upper is not None
+            for weight in self.criterion_weights
+        )
 
     def start(self, *, at: datetime) -> Self:
         """Move a pending attempt to running without changing its inputs."""
@@ -467,6 +595,7 @@ class SubmissionValidation:
         completion_ratio: Decimal,
         messages: tuple[ValidationMessage, ...] = (),
         normalized_answers: tuple[ValidationNormalizedAnswer, ...] = (),
+        prepared_matrix: ValidationPreparedMatrix | None = None,
         criterion_weights: tuple[ParticipantCriterionWeight, ...] = (),
         quality_metrics_json: JsonObject | None = None,
         consistency_ratio: Decimal | None = None,
@@ -520,6 +649,7 @@ class SubmissionValidation:
                 quality_metrics_json=quality_metrics,
                 messages=ordered_messages,
                 normalized_answers=ordered_answers,
+                prepared_matrix=prepared_matrix,
                 criterion_weights=ordered_weights,
                 failure_code=None,
                 failure_detail=None,
@@ -537,6 +667,7 @@ class SubmissionValidation:
             output_hash=output_hash,
             messages=ordered_messages,
             normalized_answers=ordered_answers,
+            prepared_matrix=prepared_matrix,
             criterion_weights=ordered_weights,
         )
 
@@ -550,7 +681,7 @@ class SubmissionValidation:
         at: datetime,
         messages: tuple[ValidationMessage, ...] = (),
         quality_metrics_json: JsonObject | None = None,
-        completion_ratio: Decimal = Decimal("0"),
+        completion_ratio: Decimal = Decimal(0),
     ) -> Self:
         """Finish a running attempt as an execution error, without outputs."""
 
@@ -575,6 +706,7 @@ class SubmissionValidation:
                 quality_metrics_json=quality_metrics,
                 messages=ordered_messages,
                 normalized_answers=(),
+                prepared_matrix=None,
                 criterion_weights=(),
                 failure_code=failure_code,
                 failure_detail=failure_detail,
@@ -594,6 +726,7 @@ class SubmissionValidation:
             failure_detail=failure_detail,
             messages=ordered_messages,
             normalized_answers=(),
+            prepared_matrix=None,
             criterion_weights=(),
         )
 
@@ -628,6 +761,7 @@ class SubmissionValidation:
                     quality_metrics_json=self.quality_metrics_json,
                     messages=self.messages,
                     normalized_answers=self.normalized_answers,
+                    prepared_matrix=self.prepared_matrix,
                     criterion_weights=self.criterion_weights,
                     failure_code=self.failure_code,
                     failure_detail=self.failure_detail,
@@ -663,14 +797,22 @@ class SubmissionValidation:
             ("Validator version", self.validator_version),
         ):
             _require_text(value, field_name)
-        for field_name, value in (
+        for field_name, optional_value in (
             ("Validation failure code", self.failure_code),
             ("Validation failure detail", self.failure_detail),
             ("Validation actor ID", self.validated_by_actor_id),
         ):
-            _require_optional_text(value, field_name)
+            _require_optional_text(optional_value, field_name)
 
     def _validate_input_integrity(self) -> None:
+        if (
+            isinstance(self.attempt_number, bool)
+            or not isinstance(self.attempt_number, int)
+            or self.attempt_number < 1
+        ):
+            raise ValidationRuleViolation(
+                "Validation attempt number must be a positive integer."
+            )
         _require_sha256(self.answers_hash, "Submission answers hash")
         _require_sha256(self.configuration_hash, "Configuration hash")
         _validate_json(self.parameter_json, "Validator parameters")
@@ -679,7 +821,7 @@ class SubmissionValidation:
 
     def _validate_output_values(self) -> None:
         _require_decimal(self.completion_ratio, "Validation completion ratio")
-        if not Decimal("0") <= self.completion_ratio <= Decimal("1"):
+        if not Decimal(0) <= self.completion_ratio <= Decimal(1):
             raise ValidationRuleViolation(
                 "Validation completion ratio must be between zero and one."
             )
@@ -706,16 +848,28 @@ class SubmissionValidation:
             )
 
     def _validate_children(self) -> None:
-        children = (
-            *self.messages,
-            *self.normalized_answers,
-            *self.criterion_weights,
-        )
-        for child in children:
-            if child.validation_id != self.validation_id:
+        for message in self.messages:
+            if message.validation_id != self.validation_id:
                 raise ValidationRuleViolation(
                     "Validation output belongs to a different validation."
                 )
+        for answer in self.normalized_answers:
+            if answer.validation_id != self.validation_id:
+                raise ValidationRuleViolation(
+                    "Validation output belongs to a different validation."
+                )
+        for weight in self.criterion_weights:
+            if weight.validation_id != self.validation_id:
+                raise ValidationRuleViolation(
+                    "Validation output belongs to a different validation."
+                )
+        if (
+            self.prepared_matrix is not None
+            and self.prepared_matrix.validation_id != self.validation_id
+        ):
+            raise ValidationRuleViolation(
+                "Prepared matrix belongs to a different validation."
+            )
         _require_unique(
             (message.validation_message_id for message in self.messages),
             "Validation message IDs",
@@ -806,6 +960,7 @@ class SubmissionValidation:
             or self.failure_detail is not None
             or self.messages
             or self.normalized_answers
+            or self.prepared_matrix is not None
             or self.criterion_weights
             or self.consistency_ratio is not None
             or self.completion_ratio != 0
@@ -870,11 +1025,12 @@ def _output_manifest(
     quality_metrics_json: JsonObject,
     messages: tuple[ValidationMessage, ...],
     normalized_answers: tuple[ValidationNormalizedAnswer, ...],
+    prepared_matrix: ValidationPreparedMatrix | None,
     criterion_weights: tuple[ParticipantCriterionWeight, ...],
     failure_code: str | None,
     failure_detail: str | None,
 ) -> dict[str, object]:
-    return {
+    manifest: dict[str, object] = {
         "schema_version": VALIDATION_OUTPUT_SCHEMA_VERSION,
         "status": status.value,
         "completion_ratio": completion_ratio,
@@ -890,6 +1046,10 @@ def _output_manifest(
         "failure_code": failure_code,
         "failure_detail": failure_detail,
     }
+    # Preserve schema-v1 hashes created before prepared matrices were added.
+    if prepared_matrix is not None:
+        manifest["prepared_matrix"] = prepared_matrix.to_manifest()
+    return manifest
 
 
 def _status_from_messages(
@@ -931,7 +1091,7 @@ def _validate_weight_totals(
                 for weight in weights
                 if weight.crisp_weight is not None
             ),
-            start=Decimal("0"),
+            start=Decimal(0),
         )
         if abs(total - EXPECTED_WEIGHT_TOTAL) > WEIGHT_TOTAL_TOLERANCE:
             raise ValidationRuleViolation(
@@ -946,7 +1106,7 @@ def _validate_weight_totals(
             for weight in weights
             if weight.fuzzy_lower is not None
         ),
-        start=Decimal("0"),
+        start=Decimal(0),
     )
     middle_total = sum(
         (
@@ -954,7 +1114,7 @@ def _validate_weight_totals(
             for weight in weights
             if weight.fuzzy_middle is not None
         ),
-        start=Decimal("0"),
+        start=Decimal(0),
     )
     upper_total = sum(
         (
@@ -962,7 +1122,7 @@ def _validate_weight_totals(
             for weight in weights
             if weight.fuzzy_upper is not None
         ),
-        start=Decimal("0"),
+        start=Decimal(0),
     )
     if abs(middle_total - EXPECTED_WEIGHT_TOTAL) > WEIGHT_TOTAL_TOLERANCE:
         raise ValidationRuleViolation(

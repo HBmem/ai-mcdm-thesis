@@ -8,15 +8,13 @@ keeping database JSON documents backend-neutral.
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
-from typing import Any, Mapping
-from uuid import UUID
+from typing import Any
 
 from poli_insight.core.time import as_utc
-from poli_insight.domain.content_hash import canonical_json_bytes
 from poli_insight.domain.enum import (
     ActorType,
     MessageSeverity,
@@ -27,12 +25,20 @@ from poli_insight.domain.validation import (
     SubmissionValidation,
     ValidationMessage,
     ValidationNormalizedAnswer,
+    ValidationPreparedMatrix,
+)
+from poli_insight.infrastructure.database.json_codec import (
+    json_from_storage as _json_from_storage,
+)
+from poli_insight.infrastructure.database.json_codec import (
+    json_to_storage as _json_to_storage,
 )
 from poli_insight.infrastructure.database.models.validation import (
     ParticipantCriterionWeightRow,
     SubmissionValidationRow,
     ValidationMessageRow,
     ValidationNormalizedAnswerRow,
+    ValidationPreparedMatrixRow,
 )
 
 
@@ -66,6 +72,7 @@ def validation_to_row(
         parameter_json=_json_to_storage(validation.parameter_json),
         parameter_hash=validation.parameter_hash,
         status=validation.status.value,
+        attempt_number=validation.attempt_number,
         completion_ratio=validation.completion_ratio,
         consistency_ratio=validation.consistency_ratio,
         quality_metrics_json=_json_to_storage(
@@ -100,6 +107,11 @@ def validation_to_row(
                 key=lambda item: item.submission_answer_id,
             )
         ],
+        prepared_matrix=(
+            validation_prepared_matrix_to_row(validation.prepared_matrix)
+            if validation.prepared_matrix is not None
+            else None
+        ),
         criterion_weights=[
             participant_criterion_weight_to_row(weight)
             for weight in sorted(
@@ -115,6 +127,8 @@ def validation_to_domain(
 ) -> SubmissionValidation:
     """Reconstruct a detached validation and verify its persisted hashes."""
 
+    quality_metrics = _json_from_storage(row.quality_metrics_json)
+    authoritative_ratio = quality_metrics.get("consistency_ratio")
     return SubmissionValidation(
         validation_id=str(row.validation_id),
         submission_id=str(row.submission_id),
@@ -126,12 +140,17 @@ def validation_to_domain(
         parameter_hash=row.parameter_hash,
         status=ValidationStatus(row.status),
         input_hash=row.input_hash,
+        attempt_number=row.attempt_number,
         completion_ratio=_required_decimal(
             row.completion_ratio,
             "completion_ratio",
         ),
-        consistency_ratio=_optional_decimal(row.consistency_ratio),
-        quality_metrics_json=_json_from_storage(row.quality_metrics_json),
+        consistency_ratio=(
+            authoritative_ratio
+            if isinstance(authoritative_ratio, Decimal)
+            else _optional_decimal(row.consistency_ratio)
+        ),
+        quality_metrics_json=quality_metrics,
         started_at=_optional_utc(row.started_at),
         completed_at=_optional_utc(row.completed_at),
         validated_by_actor_type=(
@@ -160,6 +179,11 @@ def validation_to_domain(
                 key=lambda item: str(item.submission_answer_id),
             )
         ),
+        prepared_matrix=(
+            validation_prepared_matrix_to_domain(row.prepared_matrix)
+            if row.prepared_matrix is not None
+            else None
+        ),
         criterion_weights=tuple(
             participant_criterion_weight_to_domain(weight_row)
             for weight_row in sorted(
@@ -167,6 +191,34 @@ def validation_to_domain(
                 key=lambda item: str(item.criterion_id),
             )
         ),
+    )
+
+
+def validation_prepared_matrix_to_row(
+    matrix: ValidationPreparedMatrix,
+) -> ValidationPreparedMatrixRow:
+    return ValidationPreparedMatrixRow(
+        validation_id=matrix.validation_id,
+        response_format=matrix.response_format,
+        value_shape=matrix.value_shape,
+        criterion_ids_json=list(matrix.criterion_ids),
+        matrix_json=_json_to_storage(matrix.matrix_json),
+        preparer_version=matrix.preparer_version,
+        matrix_hash=matrix.matrix_hash,
+    )
+
+
+def validation_prepared_matrix_to_domain(
+    row: ValidationPreparedMatrixRow,
+) -> ValidationPreparedMatrix:
+    return ValidationPreparedMatrix(
+        validation_id=str(row.validation_id),
+        response_format=row.response_format,
+        value_shape=row.value_shape,
+        criterion_ids=tuple(str(item) for item in row.criterion_ids_json),
+        matrix_json=_json_from_storage(row.matrix_json),
+        preparer_version=row.preparer_version,
+        matrix_hash=row.matrix_hash,
     )
 
 
@@ -228,14 +280,18 @@ def validation_normalized_answer_to_domain(
 ) -> ValidationNormalizedAnswer:
     """Reconstruct one detached validator-produced normalized answer."""
 
+    normalized_value = _json_from_storage(row.normalized_value_json)
+    authoritative_crisp = normalized_value.get("canonical_crisp_value")
     return ValidationNormalizedAnswer(
         validation_id=str(row.validation_id),
         submission_answer_id=str(row.submission_answer_id),
-        normalized_value_json=_json_from_storage(
-            row.normalized_value_json
-        ),
+        normalized_value_json=normalized_value,
         normalizer_version=row.normalizer_version,
-        crisp_value=_optional_decimal(row.crisp_value),
+        crisp_value=(
+            authoritative_crisp
+            if isinstance(authoritative_crisp, Decimal)
+            else _optional_decimal(row.crisp_value)
+        ),
         fuzzy_lower=_optional_decimal(row.fuzzy_lower),
         fuzzy_middle=_optional_decimal(row.fuzzy_middle),
         fuzzy_upper=_optional_decimal(row.fuzzy_upper),
@@ -265,16 +321,40 @@ def participant_criterion_weight_to_domain(
 ) -> ParticipantCriterionWeight:
     """Reconstruct one detached participant criterion weight."""
 
+    metadata = _json_from_storage(row.derivation_metadata_json)
+    authoritative_weight = metadata.get("normalized_weight")
+    authoritative_fuzzy = metadata.get("normalized_fuzzy_weight")
+    fuzzy_values = (
+        tuple(authoritative_fuzzy)
+        if isinstance(authoritative_fuzzy, list)
+        and len(authoritative_fuzzy) == 3
+        and all(isinstance(value, Decimal) for value in authoritative_fuzzy)
+        else None
+    )
     return ParticipantCriterionWeight(
         validation_id=str(row.validation_id),
         criterion_id=str(row.criterion_id),
-        crisp_weight=_optional_decimal(row.crisp_weight),
-        fuzzy_lower=_optional_decimal(row.fuzzy_lower),
-        fuzzy_middle=_optional_decimal(row.fuzzy_middle),
-        fuzzy_upper=_optional_decimal(row.fuzzy_upper),
-        derivation_metadata_json=_json_from_storage(
-            row.derivation_metadata_json
+        crisp_weight=(
+            authoritative_weight
+            if isinstance(authoritative_weight, Decimal)
+            else _optional_decimal(row.crisp_weight)
         ),
+        fuzzy_lower=(
+            fuzzy_values[0]
+            if fuzzy_values is not None
+            else _optional_decimal(row.fuzzy_lower)
+        ),
+        fuzzy_middle=(
+            fuzzy_values[1]
+            if fuzzy_values is not None
+            else _optional_decimal(row.fuzzy_middle)
+        ),
+        fuzzy_upper=(
+            fuzzy_values[2]
+            if fuzzy_values is not None
+            else _optional_decimal(row.fuzzy_upper)
+        ),
+        derivation_metadata_json=metadata,
     )
 
 
@@ -323,7 +403,12 @@ def apply_validation_aggregate(
     row.failure_detail = validation.failure_detail
 
     if validation.is_terminal:
-        if row.messages or row.normalized_answers or row.criterion_weights:
+        if (
+            row.messages
+            or row.normalized_answers
+            or row.prepared_matrix is not None
+            or row.criterion_weights
+        ):
             raise ImmutableValidationOutputError(
                 "Running validation unexpectedly contains persisted outputs."
             )
@@ -335,6 +420,11 @@ def apply_validation_aggregate(
             validation_normalized_answer_to_row(answer)
             for answer in validation.normalized_answers
         ]
+        row.prepared_matrix = (
+            validation_prepared_matrix_to_row(validation.prepared_matrix)
+            if validation.prepared_matrix is not None
+            else None
+        )
         row.criterion_weights = [
             participant_criterion_weight_to_row(weight)
             for weight in validation.criterion_weights
@@ -375,6 +465,11 @@ def _require_unchanged_input(
             replacement.parameter_hash,
         ),
         ("input hash", persisted.input_hash, replacement.input_hash),
+        (
+            "attempt number",
+            persisted.attempt_number,
+            replacement.attempt_number,
+        ),
     )
     for field_name, current, candidate in immutable_fields:
         if current != candidate:
@@ -417,58 +512,6 @@ def _copy_json(value: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(value))
 
 
-def _json_to_storage(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Convert supported canonical values to database-native JSON values."""
-
-    encoded = canonical_json_bytes(value).decode("utf-8")
-    stored = json.loads(encoded)
-    if not isinstance(stored, dict):
-        raise TypeError("Validation JSON storage value must be an object.")
-    return stored
-
-
-def _json_from_storage(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Restore tagged canonical values from a persisted JSON object."""
-
-    decoded = _decode_storage_value(deepcopy(dict(value)))
-    if not isinstance(decoded, dict):
-        raise TypeError("Persisted validation JSON value must be an object.")
-    return decoded
-
-
-def _decode_storage_value(value: Any) -> Any:
-    if isinstance(value, list):
-        return [_decode_storage_value(item) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    type_name = value.get("__poli_insight_type__")
-    if type_name is not None:
-        if set(value) != {"__poli_insight_type__", "value"}:
-            raise ValueError("Malformed tagged validation JSON value.")
-        tagged_value = value["value"]
-        if not isinstance(tagged_value, str):
-            raise ValueError("Tagged validation JSON value must contain text.")
-        if type_name == "decimal":
-            return Decimal(tagged_value)
-        if type_name == "uuid":
-            return UUID(tagged_value)
-        if type_name == "datetime":
-            return datetime.fromisoformat(
-                tagged_value.replace("Z", "+00:00")
-            )
-        if type_name == "date":
-            return date.fromisoformat(tagged_value)
-        raise ValueError(
-            f"Unsupported tagged validation JSON type {type_name!r}."
-        )
-
-    return {
-        key: _decode_storage_value(item)
-        for key, item in value.items()
-    }
-
-
 def _optional_id(value: object | None) -> str | None:
     return str(value) if value is not None else None
 
@@ -492,5 +535,5 @@ def _canonical_decimal(value: Decimal) -> Decimal:
 
     decimal_value = Decimal(value)
     if decimal_value.is_zero():
-        return Decimal("0")
+        return Decimal(0)
     return decimal_value.normalize()

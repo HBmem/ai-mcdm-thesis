@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Protocol
 
@@ -26,6 +27,7 @@ from poli_insight.domain.enum import (
     QuestionType,
     ResponseFormat,
     ResponseTargetType,
+    RunStatus,
     ScenarioDefinitionStatus,
     ScenarioFileRole,
     ScenarioSnapshotStatus,
@@ -40,6 +42,56 @@ from poli_insight.domain.enum import (
 
 class PageQueryError(RuntimeError):
     """Safe application-level failure raised by page query adapters."""
+
+
+class SessionDateField(StrEnum):
+    CREATED = "created"
+    OPENS = "opens"
+    CLOSES = "closes"
+    UPDATED = "updated"
+
+
+class ProcessingQueueMode(StrEnum):
+    UNPROCESSED = "unprocessed"
+    IN_PROGRESS = "in_progress"
+    PROCESSED = "processed"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionSearchFilters:
+    search: str = ""
+    statuses: tuple[SessionStatus, ...] = ()
+    scenario_key: str | None = None
+    domain: str | None = None
+    date_field: SessionDateField = SessionDateField.UPDATED
+    date_from: date | None = None
+    date_to: date | None = None
+    processing_states: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "search", self.search.strip())
+        object.__setattr__(self, "statuses", tuple(dict.fromkeys(self.statuses)))
+        object.__setattr__(
+            self,
+            "processing_states",
+            tuple(
+                dict.fromkeys(
+                    value.strip() for value in self.processing_states if value.strip()
+                )
+            ),
+        )
+        if self.scenario_key is not None:
+            normalized = self.scenario_key.strip()
+            object.__setattr__(self, "scenario_key", normalized or None)
+        if self.domain is not None:
+            normalized = self.domain.strip()
+            object.__setattr__(self, "domain", normalized or None)
+        if (
+            self.date_from is not None
+            and self.date_to is not None
+            and self.date_to < self.date_from
+        ):
+            raise ValueError("Session search end date cannot precede start date.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,16 +528,220 @@ class CriterionWeightDetail:
 @dataclass(frozen=True, slots=True)
 class ValidationQueueItem:
     submission_id: str
+    validation_id: str | None
     participant_label: str
     group_name: str
     attempt_number: int
     submitted_at: datetime
     validation_status: ValidationStatus | None
+    completion_ratio: str | None
     consistency_ratio: str | None
+    failure_code: str | None
     validation_message_count: int
     review_status: SubmissionReviewStatus
     reviewed_at: datetime | None
     reviewed_by: str | None
+
+    @property
+    def eligibility(self) -> str:
+        if self.validation_status is None:
+            return "unvalidated"
+        if self.validation_status in {
+            ValidationStatus.PENDING,
+            ValidationStatus.RUNNING,
+        }:
+            return "in_progress"
+        if self.validation_status == ValidationStatus.VALID:
+            return (
+                "excluded"
+                if self.review_status == SubmissionReviewStatus.REJECTED
+                else "eligible"
+            )
+        if self.validation_status == ValidationStatus.VALID_WITH_WARNING:
+            if self.review_status == SubmissionReviewStatus.ACCEPTED:
+                return "eligible"
+            if self.review_status == SubmissionReviewStatus.REJECTED:
+                return "excluded"
+            return "decision_required"
+        return "ineligible"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionValidationOverview:
+    session_id: str
+    session_status: SessionStatus
+    has_active_configuration: bool
+    effective_submitted_count: int
+    unvalidated_count: int
+    active_count: int
+    valid_count: int
+    warned_count: int
+    invalid_count: int
+    error_count: int
+    warning_decisions_required: int
+    latest_batch_id: str | None
+    latest_batch_number: int | None
+    latest_batch_status: RunStatus | None
+    latest_batch_created_at: datetime | None
+    latest_batch_roster_hash: str | None
+    current_roster_hash: str | None = None
+    roster_is_current: bool = False
+
+    @property
+    def validation_complete(self) -> bool:
+        return (
+            self.effective_submitted_count > 0
+            and self.unvalidated_count == 0
+            and self.active_count == 0
+            and self.warning_decisions_required == 0
+        )
+
+    @property
+    def readiness_state(self) -> str:
+        if self.effective_submitted_count == 0:
+            return "no_submissions"
+        if self.active_count:
+            return "validation_active"
+        if self.unvalidated_count:
+            return "validation_required"
+        if self.warning_decisions_required:
+            return "review_required"
+        return "ready_for_processing"
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingSessionSummary:
+    session_id: str
+    title: str
+    public_slug: str
+    status: SessionStatus
+    scenario_title: str
+    scenario_version: str
+    scenario_status: ScenarioSnapshotStatus
+    has_active_configuration: bool
+    effective_submission_count: int
+    current_roster_hash: str | None
+    latest_run_id: str | None
+    latest_run_number: int | None
+    latest_run_status: RunStatus | None
+    latest_run_created_at: datetime | None
+    last_processing_activity_at: datetime
+    latest_run_roster_hash: str | None
+    roster_is_current: bool
+    successful_run_count: int
+    next_stage: str
+    blockers: tuple[str, ...]
+    opens_at: datetime | None
+    closes_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    latest_ranking_run_id: str | None = None
+    latest_ranking_run_number: int | None = None
+    latest_ranking_run_status: RunStatus | None = None
+    latest_ranking_activity_at: datetime | None = None
+    successful_ranking_run_count: int = 0
+    latest_ranking_roster_hash: str | None = None
+    latest_ranking_source_processing_run_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingGroupSubmissionSummary:
+    stakeholder_group_id: str
+    stakeholder_group_name: str
+    configured_voting_power: str
+    enrolled_count: int
+    submitted_count: int
+    valid_count: int
+    warned_count: int
+    invalid_count: int
+    error_count: int
+    unvalidated_count: int
+    draft_attempt_count: int
+    superseded_attempt_count: int
+    withdrawn_attempt_count: int
+    resubmission_attempt_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingSubmissionContext:
+    session_id: str
+    groups: tuple[ProcessingGroupSubmissionSummary, ...]
+
+    def total(self, field_name: str) -> int:
+        return sum(int(getattr(group, field_name)) for group in self.groups)
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingMatrixView:
+    matrix_id: str
+    level: str
+    label: str
+    participant_label: str | None
+    stakeholder_group_id: str | None
+    stakeholder_group_label: str | None
+    validation_id: str | None
+    criterion_ids: tuple[str, ...]
+    criterion_labels: tuple[str, ...]
+    values: tuple[tuple[str, ...], ...]
+    weights: tuple[str | None, ...]
+    diagnostics: Mapping[str, object]
+    normalized_answers: tuple[Mapping[str, object], ...]
+    matrix_hash: str
+    warnings: tuple[str, ...] = ()
+    participant_count: int | None = None
+    voting_power: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "diagnostics",
+            MappingProxyType(dict(self.diagnostics)),
+        )
+        object.__setattr__(
+            self,
+            "normalized_answers",
+            tuple(MappingProxyType(dict(item)) for item in self.normalized_answers),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RankingAlternativeView:
+    alternative_id: str
+    alternative_label: str
+    rank: int
+    preference_value: str
+    method_metrics: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "method_metrics",
+            MappingProxyType(dict(self.method_metrics)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RankingResultView:
+    ranking_result_id: str
+    ranking_run_id: str
+    source_processing_matrix_id: str
+    level: str
+    label: str
+    participant_label: str | None
+    stakeholder_group_id: str | None
+    stakeholder_group_label: str | None
+    validation_id: str | None
+    metric_label: str
+    alternatives: tuple[RankingAlternativeView, ...]
+    diagnostics: Mapping[str, object]
+    result_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "diagnostics",
+            MappingProxyType(dict(self.diagnostics)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,6 +905,25 @@ class AlgorithmImplementationOption:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredAlgorithmSummary:
+    algorithm_implementation_id: str
+    stable_key: str
+    role: AlgorithmRole
+    conceptual_method: str
+    provider: str
+    library_name: str
+    library_version: str
+    parameters: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "parameters",
+            MappingProxyType(dict(self.parameters)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AdminAuditEventSummary:
     audit_event_id: str
     occurred_at: datetime
@@ -712,6 +987,7 @@ class PageQueries(Protocol):
     def get_session_catalog_metrics(
         self,
         *,
+        filters: SessionSearchFilters | None = None,
         search: str | None = None,
         status: SessionStatus | None = None,
         scenario_key: str | None = None,
@@ -726,6 +1002,7 @@ class PageQueries(Protocol):
     def list_admin_sessions(
         self,
         *,
+        filters: SessionSearchFilters | None = None,
         search: str | None = None,
         status: SessionStatus | None = None,
         scenario_key: str | None = None,
@@ -808,6 +1085,48 @@ class PageQueries(Protocol):
         page: int = 1,
         page_size: int = 10,
     ) -> PageResult[ValidationQueueItem]: ...
+
+    def get_session_validation_overview(
+        self,
+        session_id: str,
+    ) -> SessionValidationOverview | None:
+        """Return current effective validation state for one session."""
+        ...
+
+    def get_processing_submission_context(
+        self,
+        session_id: str,
+    ) -> ProcessingSubmissionContext | None: ...
+
+    def list_processing_sessions(
+        self,
+        *,
+        filters: SessionSearchFilters,
+        mode: ProcessingQueueMode,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> PageResult[ProcessingSessionSummary]: ...
+
+    def list_participant_validation_matrices(
+        self,
+        session_id: str,
+    ) -> tuple[ProcessingMatrixView, ...]: ...
+
+    def list_run_matrices(
+        self,
+        processing_run_id: str,
+    ) -> tuple[ProcessingMatrixView, ...]: ...
+
+    def list_ranking_results(
+        self,
+        ranking_run_id: str,
+    ) -> tuple[RankingResultView, ...]: ...
+
+    def get_session_algorithm_configuration(
+        self,
+        session_id: str,
+        role: AlgorithmRole,
+    ) -> ConfiguredAlgorithmSummary | None: ...
 
     def list_active_algorithm_implementations(
         self,

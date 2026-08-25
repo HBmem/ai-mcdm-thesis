@@ -12,6 +12,7 @@ from poli_insight.application.use_cases.add_session_configuration import (
     AddSessionConfiguration,
 )
 from poli_insight.application.use_cases.close_session import CloseSession
+from poli_insight.application.use_cases.create_ranking import CreateRanking
 from poli_insight.application.use_cases.create_session import CreateSession
 from poli_insight.application.use_cases.create_session_configuration import (
     CreateSessionConfiguration,
@@ -19,6 +20,9 @@ from poli_insight.application.use_cases.create_session_configuration import (
 from poli_insight.application.use_cases.enroll_participant import (
     EnrollmentUnitOfWork,
     EnrollParticipant,
+)
+from poli_insight.application.use_cases.finalize_validation_bundle import (
+    FinalizeValidationBundle,
 )
 from poli_insight.application.use_cases.import_bundled_scenarios import (
     ImportBundledScenarios,
@@ -28,6 +32,10 @@ from poli_insight.application.use_cases.import_invitations import (
     PreviewInvitationImport,
 )
 from poli_insight.application.use_cases.import_scenario import ImportScenario
+from poli_insight.application.use_cases.list_ranking_runs import ListRankingRuns
+from poli_insight.application.use_cases.list_validation_bundles import (
+    ListValidationBundles,
+)
 from poli_insight.application.use_cases.manage_invitations import (
     ExpireInvitations,
     IssueInvitation,
@@ -56,6 +64,12 @@ from poli_insight.application.use_cases.save_submission_draft import (
 )
 from poli_insight.application.use_cases.submit_response import SubmitResponse
 from poli_insight.application.use_cases.transition_session import TransitionSession
+from poli_insight.application.use_cases.validate_current_submissions import (
+    ValidateCurrentSubmissions,
+)
+from poli_insight.application.use_cases.validate_submission import ValidateSubmission
+from poli_insight.application.validation.preparation import CrispSubmissionInputPreparer
+from poli_insight.application.validation.service import SubmissionValidationRegistry
 from poli_insight.config import Settings, resolve_scenario_paths
 from poli_insight.infrastructure.database.engine import build_session_factory
 from poli_insight.infrastructure.database.queries.page_queries import (
@@ -63,6 +77,10 @@ from poli_insight.infrastructure.database.queries.page_queries import (
 )
 from poli_insight.infrastructure.database.unit_of_work import (
     SqlAlchemyUnitOfWork,
+)
+from poli_insight.infrastructure.ranking.pydecision_topsis import (
+    PyDecisionTopsisRunner,
+    StaticRankingRunnerRegistry,
 )
 from poli_insight.infrastructure.scenarios.bundled_source import (
     FilesystemBundledScenarioSource,
@@ -72,6 +90,10 @@ from poli_insight.infrastructure.scenarios.subprocess_function_runner import (
 )
 from poli_insight.infrastructure.security.identity_protection import (
     AesGcmIdentityProtector,
+)
+from poli_insight.infrastructure.weighting.pydecision_ahp import (
+    PyDecisionAhpRunner,
+    StaticWeightingRunnerRegistry,
 )
 
 
@@ -90,6 +112,20 @@ class SessionUseCases:
 class SubmissionUseCases:
     save_draft: SaveSubmissionDraft
     submit: SubmitResponse
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationUseCases:
+    validate_submission: ValidateSubmission
+    validate_current: ValidateCurrentSubmissions
+    finalize_bundle: FinalizeValidationBundle
+    list_bundles: ListValidationBundles
+
+
+@dataclass(frozen=True, slots=True)
+class RankingUseCases:
+    create: CreateRanking
+    list_runs: ListRankingRuns
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +170,8 @@ class ApplicationContainer:
     import_bundled_scenarios: ImportBundledScenarios
     sessions: SessionUseCases
     submissions: SubmissionUseCases
+    validation: ValidationUseCases
+    ranking: RankingUseCases
     participation: ParticipationUseCases
     operations: OperationalUseCases
     participant_imports: ParticipantImportUseCases
@@ -168,6 +206,16 @@ def create_container(
         hmac_secret=resolved_settings.participant_import_hmac_secret,
         encryption_secret=resolved_settings.participant_identity_encryption_key,
     )
+    ahp_runner = PyDecisionAhpRunner()
+    weighting_registry = StaticWeightingRunnerRegistry(ahp_runner)
+    ranking_registry = StaticRankingRunnerRegistry(PyDecisionTopsisRunner())
+    submission_validator = ValidateSubmission(
+        unit_of_work_factory,
+        SubmissionValidationRegistry(
+            CrispSubmissionInputPreparer(),
+            weighting_registry,
+        ),
+    )
 
     return ApplicationContainer(
         settings=resolved_settings,
@@ -198,6 +246,22 @@ def create_container(
         submissions=SubmissionUseCases(
             save_draft=SaveSubmissionDraft(unit_of_work_factory),
             submit=SubmitResponse(unit_of_work_factory),
+        ),
+        validation=ValidationUseCases(
+            validate_submission=submission_validator,
+            validate_current=ValidateCurrentSubmissions(
+                unit_of_work_factory,
+                submission_validator,
+            ),
+            finalize_bundle=FinalizeValidationBundle(
+                unit_of_work_factory,
+                weighting_registry,
+            ),
+            list_bundles=ListValidationBundles(unit_of_work_factory),
+        ),
+        ranking=RankingUseCases(
+            create=CreateRanking(unit_of_work_factory, ranking_registry),
+            list_runs=ListRankingRuns(unit_of_work_factory),
         ),
         participation=ParticipationUseCases(
             enroll=EnrollParticipant(enrollment_unit_of_work_factory),

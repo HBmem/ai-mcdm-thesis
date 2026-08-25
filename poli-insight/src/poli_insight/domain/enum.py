@@ -149,8 +149,11 @@ class RunStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"
+    AWAITING_REVIEW = "awaiting_review"
+    STALE = "stale"
 
 class RunInclusionStatus(StrEnum):
+    PENDING_REVIEW = "pending_review"
     INCLUDED = "included"
     EXCLUDED_INVALID = "excluded_invalid"
     EXCLUDED_SUPERSEDED = "excluded_superseded"

@@ -92,10 +92,6 @@ from poli_insight.application.use_cases.replace_participant_access_grant import 
     ReplaceParticipantAccessGrantCommand,
     ReplaceParticipantAccessGrantError,
 )
-from poli_insight.application.use_cases.review_submission import (
-    ReviewSubmissionCommand,
-    ReviewSubmissionError,
-)
 from poli_insight.application.use_cases.transition_session import (
     SessionTransition,
     TransitionSessionCommand,
@@ -115,9 +111,7 @@ from poli_insight.domain.enum import (
     ScenarioSnapshotStatus,
     SessionStatus,
     StakeholderSelectionMode,
-    SubmissionReviewStatus,
     SubmissionStatus,
-    ValidationStatus,
 )
 from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
@@ -131,6 +125,9 @@ from poli_insight.presentation.streamlit.components.scenario_archive import (
     ScenarioArchiveInspection,
     extracted_scenario_directory,
     inspect_scenario_archive,
+)
+from poli_insight.presentation.streamlit.components.session_search import (
+    render_session_search,
 )
 from poli_insight.presentation.streamlit.components.status import render_status
 from poli_insight.presentation.streamlit.context import PageContext
@@ -717,7 +714,7 @@ def _render_sessions(context: PageContext) -> None:
         st.subheader("Sessions", anchor=False)
         st.write(
             "Create decision sessions and monitor their operational readiness, "
-            "participation, and validation state."
+            "participation, and authored submissions."
         )
     with header_columns[1]:
         if st.button(
@@ -729,128 +726,108 @@ def _render_sessions(context: PageContext) -> None:
         ):
             _begin_session_creation()
 
-    filter_columns = st.columns([0.5, 0.25, 0.25])
-    with filter_columns[0]:
-        search = st.text_input(
-            "Search sessions",
-            placeholder="Title or public slug",
-            icon=":material/search:",
-            key="sessions:search",
-        )
-    with filter_columns[1]:
-        status = st.selectbox(
-            "Operational status",
-            options=(None, *SessionStatus),
-            format_func=lambda value: (
-                "All statuses"
-                if value is None
-                else value.value.replace("_", " ").title()
-            ),
-            key="sessions:status",
-        )
     scenario_options = context.queries.list_session_scenarios()
-    scenario_by_key = {item.scenario_key: item for item in scenario_options}
-    with filter_columns[2]:
-        scenario_key = st.selectbox(
-            "Scenario",
-            options=(None, *scenario_by_key),
-            format_func=lambda value: (
-                "All scenarios" if value is None else scenario_by_key[value].title
-            ),
-            key="sessions:scenario",
+    session_filters = render_session_search(
+        key="sessions:search_filters",
+        scenarios=scenario_options,
+        domains=context.queries.list_scenario_domains(),
+    )
+
+    with st.container(border=True):
+        fingerprint = session_filters
+        if st.session_state.get(_SESSION_FILTER_KEY) != fingerprint:
+            st.session_state[_SESSION_FILTER_KEY] = fingerprint
+            st.session_state[_SESSION_PAGE_KEY] = 1
+
+        metrics = context.queries.get_session_catalog_metrics(
+            filters=session_filters,
+        )
+        metric_columns = st.columns(3)
+        metric_columns[0].metric("Sessions", metrics.total_count)
+        metric_columns[1].metric("Open", metrics.open_count)
+        metric_columns[2].metric("Needs attention", metrics.attention_count)
+        style_metric_cards(
+            border_left_color=st.get_option("theme.primaryColor") or "#C4932A",
+            border_radius_px=8,
+            box_shadow=False,
         )
 
-    fingerprint = (search.strip(), status, scenario_key)
-    if st.session_state.get(_SESSION_FILTER_KEY) != fingerprint:
-        st.session_state[_SESSION_FILTER_KEY] = fingerprint
-        st.session_state[_SESSION_PAGE_KEY] = 1
-
-    metrics = context.queries.get_session_catalog_metrics(
-        search=search,
-        status=status,
-        scenario_key=scenario_key,
-    )
-    metric_columns = st.columns(3)
-    metric_columns[0].metric("Sessions", metrics.total_count)
-    metric_columns[1].metric("Open", metrics.open_count)
-    metric_columns[2].metric("Needs attention", metrics.attention_count)
-    style_metric_cards(
-        border_left_color=st.get_option("theme.primaryColor") or "#C4932A",
-        border_radius_px=8,
-        box_shadow=False,
-    )
-
-    requested_page = max(1, int(st.session_state.get(_SESSION_PAGE_KEY, 1)))
-    result = context.queries.list_admin_sessions(
-        search=search,
-        status=status,
-        scenario_key=scenario_key,
-        page=requested_page,
-        page_size=_PAGE_SIZE,
-    )
-    if requested_page > max(result.page_count, 1):
-        st.session_state[_SESSION_PAGE_KEY] = max(result.page_count, 1)
-        st.rerun()
-    if not result.items:
-        filtered = bool(search.strip() or status is not None or scenario_key)
-        render_empty_state(
-            "No matching sessions" if filtered else "No sessions yet",
-            (
-                "Adjust the session filters to see other records."
-                if filtered
-                else "Create a draft from a ready scenario snapshot to begin."
-            ),
-            icon=":material/event_note:",
+        requested_page = max(1, int(st.session_state.get(_SESSION_PAGE_KEY, 1)))
+        result = context.queries.list_admin_sessions(
+            filters=session_filters,
+            page=requested_page,
+            page_size=_PAGE_SIZE,
         )
-        return
-
-    st.caption(
-        f"{result.total} session{'s' if result.total != 1 else ''} · "
-        "Select a row to open its administrative workspace."
-    )
-    catalog_key = sha256(repr((fingerprint, result.page)).encode()).hexdigest()[:12]
-    event = st.dataframe(
-        [_session_table_row(context, item) for item in result.items],
-        column_order=(
-            "Session",
-            "Status",
-            "Participation",
-            "Validation / next step",
-            "Schedule",
-        ),
-        column_config={
-            "Session": st.column_config.TextColumn(width="large"),
-            "Status": st.column_config.TextColumn(width="small"),
-            "Participation": st.column_config.TextColumn(width="medium"),
-            "Validation / next step": st.column_config.TextColumn(width="large"),
-            "Schedule": st.column_config.TextColumn(width="medium"),
-        },
-        hide_index=True,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"sessions:catalog:{catalog_key}",
-    )
-    selected_rows = getattr(getattr(event, "selection", None), "rows", ())
-    if selected_rows:
-        selected_index = int(selected_rows[0])
-        if 0 <= selected_index < len(result.items):
-            st.session_state[_SESSION_SELECTED_KEY] = result.items[
-                selected_index
-            ].session_id
+        if requested_page > max(result.page_count, 1):
+            st.session_state[_SESSION_PAGE_KEY] = max(result.page_count, 1)
             st.rerun()
+        if not result.items:
+            filtered = bool(
+                session_filters.search
+                or session_filters.statuses
+                or session_filters.scenario_key
+                or session_filters.domain
+                or session_filters.date_from
+                or session_filters.date_to
+            )
+            render_empty_state(
+                "No matching sessions" if filtered else "No sessions yet",
+                (
+                    "Adjust the session filters to see other records."
+                    if filtered
+                    else "Create a draft from a ready scenario snapshot to begin."
+                ),
+                icon=":material/event_note:",
+            )
+            return
 
-    if result.page_count > 1:
-        pagination_key = sha256(repr(fingerprint).encode()).hexdigest()[:12]
-        selected_page = pagination(
-            result.page_count,
-            default=result.page,
-            key=f"sessions:pagination:{pagination_key}",
+        st.caption(
+            f"{result.total} session{'s' if result.total != 1 else ''} · "
+            "Select a row to open its administrative workspace."
+        )
+        catalog_key = sha256(repr((fingerprint, result.page)).encode()).hexdigest()[:12]
+        event = st.dataframe(
+            [_session_table_row(context, item) for item in result.items],
+            column_order=(
+                "Session",
+                "Status",
+                "Participation",
+                "Validation / next step",
+                "Schedule",
+            ),
+            column_config={
+                "Session": st.column_config.TextColumn(width="large"),
+                "Status": st.column_config.TextColumn(width="small"),
+                "Participation": st.column_config.TextColumn(width="medium"),
+                "Validation / next step": st.column_config.TextColumn(width="large"),
+                "Schedule": st.column_config.TextColumn(width="medium"),
+            },
+            hide_index=True,
             width="stretch",
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"sessions:catalog:{catalog_key}",
         )
-        if selected_page != result.page:
-            st.session_state[_SESSION_PAGE_KEY] = selected_page
-            st.rerun()
+        selected_rows = getattr(getattr(event, "selection", None), "rows", ())
+        if selected_rows:
+            selected_index = int(selected_rows[0])
+            if 0 <= selected_index < len(result.items):
+                st.session_state[_SESSION_SELECTED_KEY] = result.items[
+                    selected_index
+                ].session_id
+                st.rerun()
+
+        if result.page_count > 1:
+            pagination_key = sha256(repr(fingerprint).encode()).hexdigest()[:12]
+            selected_page = pagination(
+                result.page_count,
+                default=result.page,
+                key=f"sessions:pagination:{pagination_key}",
+                width="stretch",
+            )
+            if selected_page != result.page:
+                st.session_state[_SESSION_PAGE_KEY] = selected_page
+                st.rerun()
 
 
 def _session_table_row(
@@ -872,7 +849,7 @@ def _session_table_row(
             f"{item.participant_count} enrolled · "
             f"{item.submitted_participant_count} submitted"
         ),
-        "Validation / next step": _session_next_step(item),
+        "Next step": _session_next_step(item),
         "Schedule": _session_schedule(context, item),
     }
 
@@ -882,11 +859,6 @@ def _session_next_step(item: AdminSessionSummary) -> str:
         return "Pinned scenario snapshot needs attention"
     if item.status == SessionStatus.PAUSED:
         return "Moderator action required"
-    if item.validation_attention_count:
-        return (
-            f"{item.validation_attention_count} submission"
-            f"{'s' if item.validation_attention_count != 1 else ''} need review"
-        )
     if item.active_configuration_version is None and item.status in {
         SessionStatus.DRAFT,
         SessionStatus.SCHEDULED,
@@ -962,13 +934,31 @@ def _render_session_detail(
             )
         )
 
+        if summary.status in {SessionStatus.CLOSED, SessionStatus.ARCHIVED}:
+            action_label = (
+                "Open in Session Processing"
+                if summary.status == SessionStatus.CLOSED
+                else "View processing history"
+            )
+            if st.button(
+                action_label,
+                icon=":material/manufacturing:",
+                key=f"session_detail:processing:{summary.session_id}",
+            ):
+                st.session_state["processing:session_id"] = summary.session_id
+                st.session_state["processing:workspace_mode"] = (
+                    "work"
+                    if summary.status == SessionStatus.CLOSED
+                    else "processed"
+                )
+                st.switch_page(context.routes["processing"])
+
         (
             overview,
             configuration,
             invitations,
             participants,
             submissions,
-            validation,
             audit,
         ) = st.tabs(
             (
@@ -977,7 +967,6 @@ def _render_session_detail(
                 "Invitations",
                 f"Participants ({detail.participant_total})",
                 f"Submissions ({detail.submission_total})",
-                "Validation queue",
                 "Audit",
             )
         )
@@ -991,8 +980,6 @@ def _render_session_detail(
             _render_session_participants(context, detail)
         with submissions:
             _render_session_submissions(context, detail)
-        with validation:
-            _render_validation_queue(context, detail)
         with audit:
             _render_session_audit(detail)
 
@@ -1294,7 +1281,6 @@ def _render_session_overview(detail: AdminSessionDetail) -> None:
                         "Allocation": item.allocation_units / 100,
                         "Enrolled": item.enrolled_count,
                         "Submitted": item.submitted_count,
-                        "Valid": item.valid_count,
                     }
                     for item in detail.group_progress
                 ],
@@ -1313,7 +1299,6 @@ def _render_session_overview(detail: AdminSessionDetail) -> None:
     with columns[1]:
         st.markdown("#### Needs attention")
         attention = {
-            "Validation review": detail.summary.validation_attention_count,
             "Participants not submitted": max(
                 detail.summary.participant_count
                 - detail.summary.submitted_participant_count,
@@ -2865,8 +2850,6 @@ def _render_participant_detail(
                         "Attempt": item.attempt_number,
                         "Status": item.status.value.replace("_", " ").title(),
                         "Submitted": item.submitted_at,
-                        "Validation": _validation_label(item.validation_status),
-                        "Review": item.review_status.value.replace("_", " ").title(),
                         "Predecessor": item.previous_submission_id or "—",
                     } for item in participant.attempts],
                     hide_index=True,
@@ -3006,7 +2989,7 @@ def _render_session_submissions(
 ) -> None:
     st.markdown("#### Submissions")
     st.caption("Finalized answers remain immutable; corrections are separate attempts.")
-    filters = st.columns([0.34, 0.18, 0.2, 0.18, 0.1])
+    filters = st.columns([0.65, 0.2, 0.15])
     search = filters[0].text_input(
         "Search submissions",
         placeholder="Participant or group",
@@ -3019,19 +3002,7 @@ def _render_session_submissions(
         format_func=_optional_status_label,
         key=f"submissions:status:{detail.summary.session_id}",
     )
-    validation_status = filters[2].selectbox(
-        "Validation",
-        options=(None, *ValidationStatus),
-        format_func=_optional_status_label,
-        key=f"submissions:validation:{detail.summary.session_id}",
-    )
-    review_status = filters[3].selectbox(
-        "Review",
-        options=(None, *SubmissionReviewStatus),
-        format_func=_optional_status_label,
-        key=f"submissions:review:{detail.summary.session_id}",
-    )
-    sort = filters[4].selectbox(
+    sort = filters[2].selectbox(
         "Sort",
         options=("newest", "oldest", "participant"),
         format_func=lambda value: value.title(),
@@ -3040,7 +3011,7 @@ def _render_session_submissions(
     prefix = f"submissions:{detail.summary.session_id}"
     page = _operational_page(
         prefix,
-        fingerprint=(search.strip(), status, validation_status, review_status, sort),
+        fingerprint=(search.strip(), status, sort),
     )
     try:
         with st.spinner("Loading submissions…", show_time=False):
@@ -3048,8 +3019,6 @@ def _render_session_submissions(
                 detail.summary.session_id,
                 search=search,
                 status=status,
-                validation_status=validation_status,
-                review_status=review_status,
                 sort=sort,
                 page=page,
                 page_size=10,
@@ -3061,7 +3030,7 @@ def _render_session_submissions(
     if not result.items:
         render_empty_state(
             "No matching submissions"
-            if any((search, status, validation_status, review_status))
+            if any((search, status))
             else "No submissions",
             "No response attempts match the current filters.",
             icon=":material/inbox:",
@@ -3075,9 +3044,6 @@ def _render_session_submissions(
                 "Group": item.group_name,
                 "Attempt": item.attempt_number,
                 "Submission": item.status.value.title(),
-                "Validation": _validation_label(item.validation_status),
-                "Review": item.review_status.value.replace("_", " ").title(),
-                "Consistency": item.consistency_ratio or "—",
                 "Submitted": item.submitted_at,
             }
             for item in result.items
@@ -3104,99 +3070,12 @@ def _render_session_submissions(
             _render_submission_detail(context, submission)
 
 
-def _render_validation_queue(
-    context: PageContext,
-    detail: AdminSessionDetail,
-) -> None:
-    st.markdown("#### Validation review queue")
-    st.caption(
-        "Automated validation remains reproducible; operator decisions are separate, "
-        "append-only records. Accepted and rejected decisions are final."
-    )
-    filters = st.columns([0.7, 0.3])
-    search = filters[0].text_input(
-        "Search queue",
-        placeholder="Participant or group",
-        icon=":material/search:",
-        key=f"validation_queue:search:{detail.summary.session_id}",
-    )
-    review_status = filters[1].selectbox(
-        "Review status",
-        options=(None, *SubmissionReviewStatus),
-        format_func=_optional_status_label,
-        key=f"validation_queue:status:{detail.summary.session_id}",
-    )
-    prefix = f"validation_queue:{detail.summary.session_id}"
-    page = _operational_page(
-        prefix,
-        fingerprint=(search.strip(), review_status),
-    )
-    try:
-        with st.spinner("Loading validation queue…", show_time=False):
-            result = context.queries.list_validation_queue(
-                detail.summary.session_id,
-                search=search,
-                review_status=review_status,
-                page=page,
-                page_size=10,
-            )
-    except PageQueryError as error:
-        st.error(str(error), icon=":material/error:")
-        return
-    _normalize_operational_page(prefix, result)
-    if not result.items:
-        render_empty_state(
-            "No matching validation reviews"
-            if search or review_status
-            else "Validation queue is empty",
-            "Submitted attempts will appear here for operator review.",
-            icon=":material/fact_check:",
-        )
-        return
-    event = st.dataframe(
-        [
-            {
-                "ID": item.submission_id,
-                "Participant": item.participant_label,
-                "Group": item.group_name,
-                "Attempt": item.attempt_number,
-                "Validation": _validation_label(item.validation_status),
-                "Findings": item.validation_message_count,
-                "Review": item.review_status.value.replace("_", " ").title(),
-                "Submitted": item.submitted_at,
-            }
-            for item in result.items
-        ],
-        hide_index=True,
-        width="stretch",
-        selection_mode="single-row",
-        on_select="rerun",
-        key=f"validation_queue:table:{detail.summary.session_id}:{page}",
-        column_config={
-            "ID": None,
-            "Submitted": st.column_config.DatetimeColumn(format="MMM D, YYYY, h:mm a"),
-        },
-    )
-    _render_page_picker(prefix, result)
-    selected_rows = _selected_rows(event)
-    if not selected_rows:
-        return
-    item = result.items[selected_rows[0]]
-    submission = context.queries.get_session_submission_detail(
-        detail.summary.session_id,
-        item.submission_id,
-    )
-    if submission is not None:
-        _render_submission_detail(context, submission)
-        _render_review_form(context, detail, submission)
-
-
 def _render_submission_detail(context: PageContext, submission: Any) -> None:
     with st.container(border=True):
         st.markdown(
             f"##### {submission.summary.participant_label} · attempt {submission.summary.attempt_number}"
         )
-        tabs = st.tabs(("Overview", "Responses", "Matrix / weights", "Validation", "Integrity / audit"))
+        tabs = st.tabs(("Overview", "Responses", "Integrity / audit"))
         completion = (
             100.0
             if submission.required_answer_count == 0
@@ -3206,7 +3085,6 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
             )
         )
         response_rows = _submission_response_rows(submission)
-        matrix_rows, matrix_note = _submission_matrix_rows(submission)
         with tabs[0]:
             metrics = st.columns(3)
             metrics[0].metric("Progress", f"{completion:.0f}%")
@@ -3220,8 +3098,6 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
                     "Started": submission.started_at,
                     "Last saved": submission.last_saved_at,
                     "Submitted": submission.submitted_at,
-                    "Validation": _validation_label(submission.summary.validation_status),
-                    "Review": submission.review_status.value.replace("_", " ").title(),
                 }],
                 hide_index=True,
                 width="stretch",
@@ -3234,7 +3110,7 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
             if not response_rows:
                 st.info("No authored responses have been saved.")
             else:
-                st.caption("Authored values are shown separately from validator-derived values.")
+                st.caption("These are the participant's authored response values.")
                 st.dataframe(response_rows, hide_index=True, width="stretch")
                 with st.expander("Raw authored JSON"):
                     st.json(
@@ -3254,51 +3130,6 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
                     key=f"submission:responses:csv:{submission.summary.submission_id}",
                 )
         with tabs[2]:
-            st.caption(matrix_note)
-            if matrix_rows:
-                st.dataframe(matrix_rows, hide_index=True, width="stretch")
-                st.download_button(
-                    "Download displayed matrix / weights CSV",
-                    data=_rows_csv(matrix_rows),
-                    file_name=f"submission-{submission.summary.attempt_number}-matrix.csv",
-                    mime="text/csv",
-                    key=f"submission:matrix:csv:{submission.summary.submission_id}",
-                )
-                if submission.response_format == ResponseFormat.DIRECT_RATING:
-                    chart_values = {
-                        str(row["Criterion"]): float(str(row["Derived weight"]))
-                        for row in matrix_rows
-                        if row.get("Derived weight") not in {None, "—"}
-                    }
-                    if chart_values:
-                        st.bar_chart(chart_values, horizontal=True)
-            else:
-                st.info("Matrix not applicable for the available authored targets.")
-        with tabs[3]:
-            st.dataframe(
-                [{
-                    "Status": _validation_label(submission.summary.validation_status),
-                    "Completion ratio": submission.completion_ratio or "—",
-                    "Consistency ratio": submission.summary.consistency_ratio or "—",
-                    "Configured threshold": submission.consistency_threshold or "—",
-                    "Validator version": submission.validator_version or "—",
-                    "Completed": submission.validation_completed_at,
-                }],
-                hide_index=True,
-                width="stretch",
-            )
-            if (
-                submission.summary.consistency_ratio is not None
-                and submission.consistency_threshold is not None
-                and Decimal(submission.summary.consistency_ratio)
-                > Decimal(submission.consistency_threshold)
-            ):
-                st.warning("Consistency ratio exceeds the configured threshold.")
-            for message in submission.validation_messages:
-                st.warning(message)
-            if not submission.criterion_weights:
-                st.info("Derived criterion weights are unavailable until validation succeeds.")
-        with tabs[4]:
             st.dataframe(
                 [{
                     "Submission ID": submission.summary.submission_id,
@@ -3318,8 +3149,6 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
                 mime="application/json",
                 key=f"submission:json:{submission.summary.submission_id}",
             )
-            if submission.review_notes:
-                st.markdown(f"**Reviewer notes:** {submission.review_notes}")
 
 
 def _submission_response_rows(submission: Any) -> list[dict[str, object]]:
@@ -3346,66 +3175,11 @@ def _submission_response_rows(submission: Any) -> list[dict[str, object]]:
                 "Target": target,
                 "Authored response": authored,
                 "Scale numeric value": answer.selected_scale_numeric_value or "—",
-                "Derived normalized value": answer.normalized_crisp_value or "—",
                 "Answered": answer.answered_at,
                 "Response time (ms)": answer.response_time_ms or "—",
             }
         )
     return rows
-
-
-def _submission_matrix_rows(
-    submission: Any,
-) -> tuple[list[dict[str, object]], str]:
-    if submission.response_format == ResponseFormat.PAIRWISE:
-        labels: list[str] = []
-        for answer in submission.authored_answers:
-            for label in (answer.left_criterion_label, answer.right_criterion_label):
-                if label and label not in labels:
-                    labels.append(label)
-        values = {
-            (answer.left_criterion_label, answer.right_criterion_label): (
-                answer.normalized_crisp_value
-            )
-            for answer in submission.authored_answers
-            if answer.left_criterion_label and answer.right_criterion_label
-        }
-        rows = []
-        for left in labels:
-            matrix_row: dict[str, object] = {"Criterion": left}
-            for right in labels:
-                matrix_row[right] = "1" if left == right else values.get((left, right), "—") or "—"
-            rows.append(matrix_row)
-        note = (
-            "Criteria comparison matrix in frozen criterion order. Cells use validated "
-            "numeric interpretations; reciprocal cells remain blank because the read "
-            "model does not assert a reciprocity contract."
-        )
-        if not any(answer.normalized_crisp_value for answer in submission.authored_answers):
-            note = "Authored pairwise responses are available, but derived matrix values are unavailable until successful validation."
-        return rows, note
-    if submission.response_format == ResponseFormat.DIRECT_RATING:
-        weights = {item.criterion_id: item for item in submission.criterion_weights}
-        rows = []
-        for answer in submission.authored_answers:
-            if not answer.criterion_label:
-                continue
-            weight = weights.get(answer.criterion_id or "")
-            rows.append(
-                {
-                    "Criterion": answer.criterion_label,
-                    "Authored scale label": answer.selected_scale_label or "—",
-                    "Authored numeric value": answer.selected_scale_numeric_value or "—",
-                    "Derived normalized value": answer.normalized_crisp_value or "—",
-                    "Derived weight": (
-                        "—" if weight is None else weight.crisp_weight or (
-                            f"({weight.fuzzy_lower}, {weight.fuzzy_middle}, {weight.fuzzy_upper})"
-                        )
-                    ),
-                }
-            )
-        return rows, "Criterion rating and weight table; authored and derived columns are explicitly labeled."
-    return [], "This response format does not define a supported matrix for these question targets; use the authored responses table."
 
 
 def _rows_csv(rows: list[dict[str, object]]) -> str:
@@ -3440,97 +3214,11 @@ def _safe_submission_json(submission: Any) -> str:
                 "prompt": item.prompt,
                 "selected_scale_label": item.selected_scale_label,
                 "raw_value": dict(item.raw_value),
-                "normalized_value": (
-                    None if item.normalized_value is None else dict(item.normalized_value)
-                ),
-                "normalizer_version": item.normalizer_version,
             }
             for item in submission.authored_answers
         ],
-        "validation": {
-            "status": (
-                None
-                if submission.summary.validation_status is None
-                else submission.summary.validation_status.value
-            ),
-            "completion_ratio": submission.completion_ratio,
-            "consistency_ratio": submission.summary.consistency_ratio,
-            "consistency_threshold": submission.consistency_threshold,
-            "validator_version": submission.validator_version,
-            "findings": list(submission.validation_messages),
-            "criterion_weights": [
-                {
-                    "criterion_id": item.criterion_id,
-                    "criterion_label": item.criterion_label,
-                    "crisp_weight": item.crisp_weight,
-                    "fuzzy": [item.fuzzy_lower, item.fuzzy_middle, item.fuzzy_upper],
-                }
-                for item in submission.criterion_weights
-            ],
-        },
     }
     return json.dumps(payload, indent=2, default=str)
-
-
-def _render_review_form(
-    context: PageContext,
-    detail: AdminSessionDetail,
-    submission: Any,
-) -> None:
-    if submission.review_status in {
-        SubmissionReviewStatus.ACCEPTED,
-        SubmissionReviewStatus.REJECTED,
-    }:
-        st.info("This review decision is final and cannot be overwritten.")
-        return
-    actor_id = context.principal.subject
-    prefix = f"validation_review:{submission.summary.submission_id}"
-    with st.container(border=True):
-        decision = st.radio(
-            "Decision",
-            options=(
-                SubmissionReviewStatus.NEEDS_REVIEW,
-                SubmissionReviewStatus.ACCEPTED,
-                SubmissionReviewStatus.REJECTED,
-            ),
-            format_func=lambda value: value.value.replace("_", " ").title(),
-            horizontal=True,
-            key=f"{prefix}:decision",
-        )
-        notes = st.text_area(
-            "Reviewer notes",
-            help="Required for needs-review and rejected decisions.",
-            key=f"{prefix}:notes",
-        )
-        confirmed = st.checkbox(
-            "I confirm this review decision and understand that accepted or "
-            "rejected decisions are final.",
-            key=f"{prefix}:confirmed",
-        )
-        submitted = st.button(
-            "Record decision",
-            type="primary",
-            disabled=actor_id is None or not confirmed,
-            key=f"{prefix}:submit",
-        )
-    if not submitted or actor_id is None:
-        return
-    try:
-        context.container.operations.review_submission.execute(
-            ReviewSubmissionCommand(
-                session_id=detail.summary.session_id,
-                submission_id=submission.summary.submission_id,
-                status=decision,
-                actor_id=actor_id,
-                reviewer_notes=notes.strip() or None,
-                validation_id=submission.validation_id,
-            )
-        )
-    except ReviewSubmissionError as error:
-        st.error(str(error), icon=":material/error:")
-    else:
-        st.success("Review decision recorded.", icon=":material/check_circle:")
-        st.rerun()
 
 
 def _operational_page(prefix: str, *, fingerprint: tuple[Any, ...]) -> int:
@@ -3579,10 +3267,6 @@ def _selected_rows(event: Any) -> list[int]:
     selection = getattr(event, "selection", None)
     rows = getattr(selection, "rows", ())
     return [int(row) for row in rows]
-
-
-def _validation_label(value: ValidationStatus | None) -> str:
-    return "Not run" if value is None else value.value.replace("_", " ").title()
 
 
 def _admin_datetime(

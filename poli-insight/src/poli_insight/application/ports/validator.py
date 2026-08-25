@@ -38,8 +38,8 @@ from poli_insight.domain.validation import (
     SubmissionValidation,
     ValidationMessage,
     ValidationNormalizedAnswer,
+    ValidationPreparedMatrix,
 )
-
 
 JsonObject = Mapping[str, Any]
 _STABLE_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_.-]*")
@@ -216,10 +216,9 @@ class ValidationRequest:
 
     def _validate_algorithm_binding(self) -> None:
         self.algorithm_config.validate_integrity()
-        if self.algorithm_config.role != AlgorithmRole.VALIDATION:
+        if self.algorithm_config.role != AlgorithmRole.WEIGHTING:
             raise ValidatorContractViolation(
-                "Validation requires an algorithm configuration with the "
-                "validation role."
+                "Validation requires the configured weighting algorithm."
             )
         if (
             self.algorithm_config.configuration_version_id
@@ -259,6 +258,7 @@ class ValidationExecutionResult:
     normalized_answers: tuple[ValidationNormalizedAnswer, ...] = field(
         default_factory=tuple
     )
+    prepared_matrix: ValidationPreparedMatrix | None = None
     criterion_weights: tuple[ParticipantCriterionWeight, ...] = field(
         default_factory=tuple
     )
@@ -311,6 +311,7 @@ class ValidationExecutionResult:
             completion_ratio=self.completion_ratio,
             messages=self.messages,
             normalized_answers=self.normalized_answers,
+            prepared_matrix=self.prepared_matrix,
             criterion_weights=self.criterion_weights,
             quality_metrics_json=self.quality_metrics_json,
             consistency_ratio=self.consistency_ratio,
@@ -321,16 +322,28 @@ class ValidationExecutionResult:
         )
 
     def _validate_children(self) -> None:
-        children = (
-            *self.messages,
-            *self.normalized_answers,
-            *self.criterion_weights,
-        )
-        for child in children:
-            if child.validation_id != self.validation_id:
+        for message in self.messages:
+            if message.validation_id != self.validation_id:
                 raise ValidatorContractViolation(
                     "Validator output belongs to a different validation."
                 )
+        for answer in self.normalized_answers:
+            if answer.validation_id != self.validation_id:
+                raise ValidatorContractViolation(
+                    "Validator output belongs to a different validation."
+                )
+        for weight in self.criterion_weights:
+            if weight.validation_id != self.validation_id:
+                raise ValidatorContractViolation(
+                    "Validator output belongs to a different validation."
+                )
+        if (
+            self.prepared_matrix is not None
+            and self.prepared_matrix.validation_id != self.validation_id
+        ):
+            raise ValidatorContractViolation(
+                "Prepared matrix belongs to a different validation."
+            )
         _require_unique(
             (message.validation_message_id for message in self.messages),
             "Validation result message IDs",
@@ -350,6 +363,129 @@ class ValidationExecutionResult:
             (weight.criterion_id for weight in self.criterion_weights),
             "Validation result criterion IDs",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedComparisonMatrix:
+    """Algorithm-independent prepared input and its answer evidence."""
+
+    matrix: ValidationPreparedMatrix
+    normalized_answers: tuple[ValidationNormalizedAnswer, ...]
+
+    @property
+    def criterion_ids(self) -> tuple[str, ...]:
+        return self.matrix.criterion_ids
+
+    @property
+    def values(self) -> tuple[tuple[Decimal, ...], ...]:
+        raw_values = self.matrix.matrix_json.get("values")
+        if not isinstance(raw_values, (list, tuple)):
+            raise ValidatorContractViolation("Prepared matrix values are missing.")
+        try:
+            return tuple(
+                tuple(
+                    item if isinstance(item, Decimal) else Decimal(str(item))
+                    for item in row
+                )
+                for row in raw_values
+            )
+        except (TypeError, ValueError, ArithmeticError) as error:
+            raise ValidatorContractViolation(
+                "Prepared matrix contains non-decimal crisp values."
+            ) from error
+
+
+@dataclass(frozen=True, slots=True)
+class WeightingExecutionResult:
+    """Provider-neutral output from a configured weighting algorithm."""
+
+    criterion_ids: tuple[str, ...]
+    crisp_weights: tuple[Decimal, ...] = field(default_factory=tuple)
+    fuzzy_weights: tuple[tuple[Decimal, Decimal, Decimal], ...] = field(
+        default_factory=tuple
+    )
+    diagnostics_json: JsonObject = field(default_factory=dict)
+    consistency_ratio: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        if not self.criterion_ids:
+            raise ValidatorContractViolation(
+                "Weighting output requires criterion identities."
+            )
+        if bool(self.crisp_weights) == bool(self.fuzzy_weights):
+            raise ValidatorContractViolation(
+                "Weighting output must contain exactly one numeric weight shape."
+            )
+        weights_length = (
+            len(self.crisp_weights)
+            if self.crisp_weights
+            else len(self.fuzzy_weights)
+        )
+        if len(self.criterion_ids) != weights_length:
+            raise ValidatorContractViolation(
+                "Weighting output must contain one weight per criterion."
+            )
+        _require_unique(self.criterion_ids, "Weighting output criterion IDs")
+        if self.crisp_weights:
+            for weight in self.crisp_weights:
+                _require_nonnegative_decimal(weight, "Weighting output weight")
+            total = sum(self.crisp_weights, Decimal(0))
+            if abs(total - Decimal(1)) > Decimal("1e-9"):
+                raise ValidatorContractViolation(
+                    "Crisp weighting output must be normalized to one."
+                )
+        else:
+            for lower, middle, upper in self.fuzzy_weights:
+                for weight in (lower, middle, upper):
+                    _require_nonnegative_decimal(
+                        weight,
+                        "Fuzzy weighting output value",
+                    )
+                if not lower <= middle <= upper:
+                    raise ValidatorContractViolation(
+                        "Fuzzy weights must satisfy lower <= middle <= upper."
+                    )
+            middle_total = sum(
+                (weight[1] for weight in self.fuzzy_weights),
+                Decimal(0),
+            )
+            if abs(middle_total - Decimal(1)) > Decimal("1e-9"):
+                raise ValidatorContractViolation(
+                    "Fuzzy middle weights must be normalized to one."
+                )
+        if self.consistency_ratio is not None:
+            _require_nonnegative_decimal(
+                self.consistency_ratio, "Weighting consistency ratio"
+            )
+        _validate_json(self.diagnostics_json, "Weighting diagnostics")
+
+
+class SubmissionInputPreparer(Protocol):
+    """Prepare valid authored answers without executing weighting math."""
+
+    @property
+    def version(self) -> str: ...
+
+    def prepare(self, request: ValidationRequest) -> PreparedComparisonMatrix: ...
+
+
+class WeightingAlgorithmRunner(Protocol):
+    """Execute one provider-specific weighting implementation."""
+
+    @property
+    def metadata(self) -> ValidatorMetadata: ...
+
+    def execute(
+        self,
+        prepared: PreparedComparisonMatrix,
+        parameters: JsonObject,
+    ) -> WeightingExecutionResult: ...
+
+
+class WeightingRunnerRegistry(Protocol):
+    """Resolve runners using immutable algorithm implementation identity."""
+
+    def get(self, implementation_id: str) -> WeightingAlgorithmRunner: ...
 
 
 class Validator(Protocol):
@@ -375,6 +511,12 @@ class Validator(Protocol):
         begin by calling ``request.ensure_compatible(self.metadata)``.
         """
         ...
+
+
+class ValidatorRegistry(Protocol):
+    """Resolve a complete validation pipeline for a weighting implementation."""
+
+    def for_implementation(self, implementation_id: str) -> Validator: ...
 
 
 def _require_text(value: str, field_name: str) -> None:
@@ -403,7 +545,7 @@ def _require_positive_integer(value: int, field_name: str) -> None:
 
 def _require_ratio(value: Decimal, field_name: str) -> None:
     _require_decimal(value, field_name)
-    if not Decimal("0") <= value <= Decimal("1"):
+    if not Decimal(0) <= value <= Decimal(1):
         raise ValidatorContractViolation(
             f"{field_name} must be between zero and one."
         )

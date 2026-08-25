@@ -9,7 +9,9 @@ flush changes but never commits or rolls back.
 from __future__ import annotations
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Load, Session as DatabaseSession, selectinload
+from sqlalchemy.orm import Session as DatabaseSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.base import ExecutableOption
 
 from poli_insight.application.ports.submission_repository import (
     SubmissionAttemptPlan,
@@ -41,7 +43,7 @@ class InvalidSubmissionAttemptHistoryError(RuntimeError):
     """Raised when persisted attempt lineage is internally inconsistent."""
 
 
-def _submission_load_options() -> tuple[Load, ...]:
+def _submission_load_options() -> tuple[ExecutableOption, ...]:
     """Load answer children without exposing unrelated comment rows."""
 
     return (selectinload(SubmissionRow.answers),)
@@ -123,6 +125,24 @@ class SqlAlchemySubmissionRepository:
         )
         self._validate_attempt_rows(rows)
         return tuple(submission_to_domain(row) for row in rows)
+
+    def list_effective_for_configuration(
+        self,
+        configuration_version_id: str,
+    ) -> tuple[Submission, ...]:
+        statement = (
+            select(SubmissionRow)
+            .options(*_submission_load_options())
+            .where(
+                SubmissionRow.configuration_version_id == configuration_version_id,
+                SubmissionRow.status == SubmissionStatus.SUBMITTED.value,
+            )
+            .order_by(SubmissionRow.participant_id, SubmissionRow.submission_id)
+        )
+        return tuple(
+            submission_to_domain(row)
+            for row in self._database_session.scalars(statement).all()
+        )
 
     def lock_attempt_plan(
         self,
@@ -233,7 +253,7 @@ class SqlAlchemySubmissionRepository:
             # SQLite has no row-level FOR UPDATE. A no-op update acquires its
             # write reservation before attempt state is inspected, serializing
             # competing planners until the surrounding transaction ends.
-            statement = (
+            update_statement = (
                 update(ParticipantRow)
                 .where(
                     ParticipantRow.participant_id == participant_id,
@@ -242,18 +262,29 @@ class SqlAlchemySubmissionRepository:
                 )
                 .values(participant_id=ParticipantRow.participant_id)
             )
-            result = self._database_session.execute(statement)
-            owner_exists = result.rowcount == 1
+            self._database_session.execute(update_statement)
+            owner_exists = (
+                self._database_session.scalar(
+                    select(ParticipantRow.participant_id).where(
+                        ParticipantRow.participant_id == participant_id,
+                        ParticipantRow.configuration_version_id
+                        == configuration_version_id,
+                    )
+                )
+                is not None
+            )
         else:
-            statement = select(ParticipantRow.participant_id).where(
+            select_statement = select(ParticipantRow.participant_id).where(
                 ParticipantRow.participant_id == participant_id,
                 ParticipantRow.configuration_version_id
                 == configuration_version_id,
             )
             if self._uses_postgresql():
-                statement = statement.with_for_update()
+                select_statement = select_statement.with_for_update()
             owner_exists = (
-                self._database_session.execute(statement).scalar_one_or_none()
+                self._database_session.execute(
+                    select_statement
+                ).scalar_one_or_none()
                 is not None
             )
 

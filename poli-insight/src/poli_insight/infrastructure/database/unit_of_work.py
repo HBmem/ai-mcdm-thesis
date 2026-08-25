@@ -24,6 +24,12 @@ from poli_insight.infrastructure.database.repositories.participant_repository im
     SqlAlchemyParticipantRepository,
     SqlAlchemySessionInvitationRepository,
 )
+from poli_insight.infrastructure.database.repositories.processing_repository import (
+    SqlAlchemyProcessingRunRepository,
+)
+from poli_insight.infrastructure.database.repositories.ranking_repository import (
+    SqlAlchemyRankingRunRepository,
+)
 from poli_insight.infrastructure.database.repositories.scenario_repository import (
     SqlAlchemyScenarioRepository,
 )
@@ -94,6 +100,12 @@ class SqlAlchemyUnitOfWork:
             self.database_session
         )
         self.participant_identities = SqlAlchemyParticipantIdentityRepository(
+            self.database_session
+        )
+        self.processing_runs = SqlAlchemyProcessingRunRepository(
+            self.database_session
+        )
+        self.ranking_runs = SqlAlchemyRankingRunRepository(
             self.database_session
         )
 

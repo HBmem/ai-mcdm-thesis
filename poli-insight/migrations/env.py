@@ -1,20 +1,21 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.base import Base
-from poli_insight.infrastructure.database.models import audit  # noqa: F401
-from poli_insight.infrastructure.database.models import operations  # noqa: F401
-from poli_insight.infrastructure.database.models import participation  # noqa: F401
-from poli_insight.infrastructure.database.models import scenario  # noqa: F401
-from poli_insight.infrastructure.database.models import session  # noqa: F401
-from poli_insight.infrastructure.database.models import submission  # noqa: F401
-from poli_insight.infrastructure.database.models import validation  # noqa: F401
-
+from poli_insight.infrastructure.database.models import (
+    audit,  # noqa: F401
+    operations,  # noqa: F401
+    participation,  # noqa: F401
+    processing,  # noqa: F401
+    ranking,  # noqa: F401
+    scenario,  # noqa: F401
+    session,  # noqa: F401
+    submission,  # noqa: F401
+    validation,  # noqa: F401
+)
 from poli_insight.infrastructure.database.types import (
     UTCDateTime,
     UUIDString,

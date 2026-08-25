@@ -8,13 +8,12 @@ this adapter may flush changes but never commits or rolls back.
 from __future__ import annotations
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Load, Session as DatabaseSession, selectinload
+from sqlalchemy.orm import Session as DatabaseSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.base import ExecutableOption
 
 from poli_insight.domain.validation import SubmissionValidation
 from poli_insight.infrastructure.database.mappers.validation import (
-    ImmutableValidationInputError as ImmutableValidationInputError,
-    ImmutableValidationOutputError as ImmutableValidationOutputError,
-    InvalidValidationTransitionError as InvalidValidationTransitionError,
     apply_validation_aggregate,
     validation_to_domain,
     validation_to_row,
@@ -28,12 +27,13 @@ class ValidationNotFoundError(LookupError):
     """Raised when a validation requested for persistence does not exist."""
 
 
-def _validation_load_options() -> tuple[Load, ...]:
+def _validation_load_options() -> tuple[ExecutableOption, ...]:
     """Eager-load every child required to reconstruct a validation."""
 
     return (
         selectinload(SubmissionValidationRow.messages),
         selectinload(SubmissionValidationRow.normalized_answers),
+        selectinload(SubmissionValidationRow.prepared_matrix),
         selectinload(SubmissionValidationRow.criterion_weights),
     )
 
@@ -106,8 +106,40 @@ class SqlAlchemyValidationRepository:
                 SubmissionValidationRow.parameter_hash == parameter_hash,
             )
         )
+        statement = statement.order_by(
+            SubmissionValidationRow.attempt_number.desc()
+        ).limit(1)
         row = self._database_session.execute(statement).scalar_one_or_none()
         return None if row is None else validation_to_domain(row)
+
+    def list_by_input_identity(
+        self,
+        *,
+        submission_id: str,
+        answers_hash: str,
+        configuration_hash: str,
+        validator_implementation_id: str,
+        validator_version: str,
+        parameter_hash: str,
+    ) -> tuple[SubmissionValidation, ...]:
+        statement = (
+            select(SubmissionValidationRow)
+            .options(*_validation_load_options())
+            .where(
+                SubmissionValidationRow.submission_id == submission_id,
+                SubmissionValidationRow.answers_hash == answers_hash,
+                SubmissionValidationRow.configuration_hash == configuration_hash,
+                SubmissionValidationRow.validator_implementation_id
+                == validator_implementation_id,
+                SubmissionValidationRow.validator_version == validator_version,
+                SubmissionValidationRow.parameter_hash == parameter_hash,
+            )
+            .order_by(SubmissionValidationRow.attempt_number)
+        )
+        return tuple(
+            validation_to_domain(row)
+            for row in self._database_session.scalars(statement).all()
+        )
 
     def save(self, validation: SubmissionValidation) -> None:
         """Persist one allowed lifecycle transition without committing."""
@@ -140,7 +172,7 @@ class SqlAlchemyValidationRepository:
                 )
             )
             result = self._database_session.execute(reservation)
-            if result.rowcount == 0:
+            if getattr(result, "rowcount", 0) == 0:
                 return None
 
         statement = (

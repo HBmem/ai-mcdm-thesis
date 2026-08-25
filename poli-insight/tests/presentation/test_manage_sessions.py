@@ -259,7 +259,6 @@ from poli_insight.presentation.streamlit.pages.admin.manage_sessions import (
     _render_session_invitations,
     _render_session_participants,
     _render_session_submissions,
-    _render_validation_queue,
 )
 
 
@@ -283,10 +282,6 @@ class Queries:
     def list_session_submissions(self, session_id, **arguments):
         return PageResult((), arguments["page"], arguments["page_size"], 0)
 
-    def list_validation_queue(self, session_id, **arguments):
-        return PageResult((), arguments["page"], arguments["page_size"], 0)
-
-
 detail = SimpleNamespace(
     summary=SimpleNamespace(
         session_id="session-1",
@@ -308,43 +303,6 @@ context = SimpleNamespace(
 _render_session_invitations(context, detail)
 _render_session_participants(context, detail)
 _render_session_submissions(context, detail)
-_render_validation_queue(context, detail)
-"""
-
-
-VALIDATION_REVIEW_FORM_APP = """
-from types import SimpleNamespace
-
-from poli_insight.domain.enum import SubmissionReviewStatus
-from poli_insight.presentation.streamlit.pages.admin.manage_sessions import (
-    _render_review_form,
-)
-
-
-class ReviewSubmission:
-    def execute(self, command):
-        return command
-
-
-context = SimpleNamespace(
-    principal=SimpleNamespace(subject="admin"),
-    container=SimpleNamespace(
-        operations=SimpleNamespace(
-            review_submission=ReviewSubmission(),
-        ),
-    ),
-)
-detail = SimpleNamespace(summary=SimpleNamespace(session_id="session-1"))
-submission = SimpleNamespace(
-    summary=SimpleNamespace(
-        submission_id="submission-1",
-        participant_label="Participant SAMPLE",
-        attempt_number=1,
-    ),
-    review_status=SubmissionReviewStatus.PENDING,
-    validation_id=None,
-)
-_render_review_form(context, detail, submission)
 """
 
 
@@ -378,24 +336,6 @@ _render_configuration_rules_step(prefix, "rules-test:step")
 
 
 class ManageSessionsPageTests(unittest.TestCase):
-    def test_validation_review_submit_updates_with_confirmation(self) -> None:
-        app = AppTest.from_string(
-            VALIDATION_REVIEW_FORM_APP,
-            default_timeout=10,
-        ).run()
-
-        submit = _button(app, "Record decision")
-        self.assertTrue(submit.disabled)
-
-        confirmation = next(
-            item
-            for item in app.checkbox
-            if item.label.startswith("I confirm this review decision")
-        )
-        app = confirmation.set_value(True).run()
-        self.assertFalse(app.exception)
-        self.assertFalse(_button(app, "Record decision").disabled)
-
     def test_configuration_form_has_no_reactive_disabled_fields(self) -> None:
         app = AppTest.from_string(
             CONFIGURATION_RULES_FORM_APP,
@@ -424,7 +364,7 @@ class ManageSessionsPageTests(unittest.TestCase):
         self.assertIn("Invitation management", markdown)
         self.assertIn("Participants", markdown)
         self.assertIn("Submissions", markdown)
-        self.assertIn("Validation review queue", markdown)
+        self.assertNotIn("Validation review queue", markdown)
 
     def test_empty_scenario_library_renders_metrics_and_import_action(self) -> None:
         app = AppTest.from_string(EMPTY_LIBRARY_APP, default_timeout=10).run()

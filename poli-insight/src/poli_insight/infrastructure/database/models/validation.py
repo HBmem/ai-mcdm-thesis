@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,6 +29,19 @@ from poli_insight.domain.enum import (
 )
 from poli_insight.infrastructure.database.base import Base
 from poli_insight.infrastructure.database.types import UTCDateTime, UUIDString
+
+if TYPE_CHECKING:
+    from poli_insight.infrastructure.database.models.scenario import (
+        ScenarioCriterionRow,
+    )
+    from poli_insight.infrastructure.database.models.session import (
+        AlgorithmImplementationRow,
+        ResponseQuestionDefinitionRow,
+    )
+    from poli_insight.infrastructure.database.models.submission import (
+        SubmissionAnswerRow,
+        SubmissionRow,
+    )
 
 
 NUMERIC_PRECISION = 38
@@ -51,13 +65,9 @@ class SubmissionValidationRow(Base):
             name="uq_submission_validations_submission_id",
         ),
         UniqueConstraint(
-            "submission_id",
-            "answers_hash",
-            "configuration_hash",
-            "validator_implementation_id",
-            "validator_version",
-            "parameter_hash",
-            name="uq_submission_validations_input_identity",
+            "input_hash",
+            "attempt_number",
+            name="uq_submission_validations_input_attempt",
         ),
         CheckConstraint(
             f"status IN ({_enum_sql_values(ValidationStatus)})",
@@ -72,6 +82,10 @@ class SubmissionValidationRow(Base):
         CheckConstraint(
             "completion_ratio >= 0 AND completion_ratio <= 1",
             name="ck_submission_validations_completion_range",
+        ),
+        CheckConstraint(
+            "attempt_number >= 1",
+            name="ck_submission_validations_attempt_positive",
         ),
         CheckConstraint(
             "consistency_ratio IS NULL OR consistency_ratio >= 0",
@@ -181,6 +195,13 @@ class SubmissionValidationRow(Base):
             "ix_submission_validations_input_hash",
             "input_hash",
         ),
+        Index(
+            "uq_submission_validations_active_input",
+            "input_hash",
+            unique=True,
+            sqlite_where=text("status IN ('pending', 'running')"),
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
     )
 
     validation_id: Mapped[UUID] = mapped_column(
@@ -231,10 +252,13 @@ class SubmissionValidationRow(Base):
         default=ValidationStatus.PENDING.value,
         server_default=ValidationStatus.PENDING.value,
     )
+    attempt_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     completion_ratio: Mapped[Decimal] = mapped_column(
         Numeric(NUMERIC_PRECISION, NUMERIC_SCALE),
         nullable=False,
-        default=Decimal("0"),
+        default=Decimal(0),
         server_default="0",
     )
     consistency_ratio: Mapped[Decimal | None] = mapped_column(
@@ -303,12 +327,65 @@ class SubmissionValidationRow(Base):
         lazy="raise",
         order_by="ValidationNormalizedAnswerRow.submission_answer_id",
     )
+    prepared_matrix: Mapped[ValidationPreparedMatrixRow | None] = relationship(
+        back_populates="validation",
+        cascade="save-update, merge",
+        passive_deletes=True,
+        lazy="raise",
+        uselist=False,
+    )
     criterion_weights: Mapped[list[ParticipantCriterionWeightRow]] = relationship(
         back_populates="validation",
         cascade="save-update, merge",
         passive_deletes=True,
         lazy="raise",
         order_by="ParticipantCriterionWeightRow.criterion_id",
+    )
+
+
+class ValidationPreparedMatrixRow(Base):
+    """One immutable provider-neutral matrix for a validation result."""
+
+    __tablename__ = "validation_prepared_matrices"
+    __table_args__ = (
+        CheckConstraint(
+            "response_format IN ('direct_rating', 'pairwise')",
+            name="ck_validation_prepared_matrices_response_format",
+        ),
+        CheckConstraint(
+            "value_shape IN ('crisp', 'triangular_fuzzy')",
+            name="ck_validation_prepared_matrices_value_shape",
+        ),
+        CheckConstraint(
+            "length(matrix_hash) = 64 AND matrix_hash = lower(matrix_hash)",
+            name="ck_validation_prepared_matrices_hash_format",
+        ),
+    )
+
+    validation_id: Mapped[UUID] = mapped_column(
+        UUIDString(),
+        ForeignKey(
+            "submission_validations.validation_id",
+            name="fk_validation_prepared_matrices_validation_id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    )
+    response_format: Mapped[str] = mapped_column(String(50), nullable=False)
+    value_shape: Mapped[str] = mapped_column(String(50), nullable=False)
+    criterion_ids_json: Mapped[list[str]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
+    matrix_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
+    preparer_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    matrix_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    validation: Mapped[SubmissionValidationRow] = relationship(
+        back_populates="prepared_matrix",
+        foreign_keys=[validation_id],
+        lazy="raise",
     )
 
 
