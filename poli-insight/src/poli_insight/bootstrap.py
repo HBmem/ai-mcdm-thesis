@@ -32,6 +32,7 @@ from poli_insight.application.use_cases.import_invitations import (
     PreviewInvitationImport,
 )
 from poli_insight.application.use_cases.import_scenario import ImportScenario
+from poli_insight.application.use_cases.list_analysis_runs import ListAnalysisRuns
 from poli_insight.application.use_cases.list_ranking_runs import ListRankingRuns
 from poli_insight.application.use_cases.list_validation_bundles import (
     ListValidationBundles,
@@ -59,6 +60,7 @@ from poli_insight.application.use_cases.replace_participant_access_grant import 
     ReplaceParticipantAccessGrant,
 )
 from poli_insight.application.use_cases.review_submission import ReviewSubmission
+from poli_insight.application.use_cases.run_selected_analyses import RunSelectedAnalyses
 from poli_insight.application.use_cases.save_submission_draft import (
     SaveSubmissionDraft,
 )
@@ -129,6 +131,12 @@ class RankingUseCases:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisUseCases:
+    run_selected: RunSelectedAnalyses
+    list_runs: ListAnalysisRuns
+
+
+@dataclass(frozen=True, slots=True)
 class ParticipationUseCases:
     enroll: EnrollParticipant
     resume: ResumeParticipant
@@ -172,6 +180,7 @@ class ApplicationContainer:
     submissions: SubmissionUseCases
     validation: ValidationUseCases
     ranking: RankingUseCases
+    analysis: AnalysisUseCases
     participation: ParticipationUseCases
     operations: OperationalUseCases
     participant_imports: ParticipantImportUseCases
@@ -230,15 +239,9 @@ def create_container(
         ),
         sessions=SessionUseCases(
             create=CreateSession(unit_of_work_factory),
-            add_configuration=AddSessionConfiguration(
-                unit_of_work_factory
-            ),
-            create_configuration=CreateSessionConfiguration(
-                unit_of_work_factory
-            ),
-            activate_configuration=ActivateSessionConfiguration(
-                unit_of_work_factory
-            ),
+            add_configuration=AddSessionConfiguration(unit_of_work_factory),
+            create_configuration=CreateSessionConfiguration(unit_of_work_factory),
+            activate_configuration=ActivateSessionConfiguration(unit_of_work_factory),
             open=OpenSession(unit_of_work_factory),
             close=CloseSession(unit_of_work_factory),
             transition=TransitionSession(unit_of_work_factory),
@@ -263,6 +266,14 @@ def create_container(
             create=CreateRanking(unit_of_work_factory, ranking_registry),
             list_runs=ListRankingRuns(unit_of_work_factory),
         ),
+        analysis=AnalysisUseCases(
+            run_selected=RunSelectedAnalyses(
+                unit_of_work_factory,
+                weighting_registry,
+                ranking_registry,
+            ),
+            list_runs=ListAnalysisRuns(unit_of_work_factory),
+        ),
         participation=ParticipationUseCases(
             enroll=EnrollParticipant(enrollment_unit_of_work_factory),
             resume=ResumeParticipant(unit_of_work_factory),
@@ -284,9 +295,7 @@ def create_container(
         ),
         participant_imports=ParticipantImportUseCases(
             get_session=GetParticipantImportSession(unit_of_work_factory),
-            generate_template=GenerateParticipantImportTemplate(
-                unit_of_work_factory
-            ),
+            generate_template=GenerateParticipantImportTemplate(unit_of_work_factory),
             preview=PreviewParticipantSubmissionImport(
                 unit_of_work_factory,
                 identity_protector,
@@ -302,11 +311,7 @@ def create_container(
                     resolved_settings.imported_identity_retention_days
                 ),
             ),
-            redact_expired_identity=RedactExpiredImportedIdentity(
-                unit_of_work_factory
-            ),
-            generate_resume_links=GenerateImportedResumeLinks(
-                unit_of_work_factory
-            ),
+            redact_expired_identity=RedactExpiredImportedIdentity(unit_of_work_factory),
+            generate_resume_links=GenerateImportedResumeLinks(unit_of_work_factory),
         ),
     )

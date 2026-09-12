@@ -21,6 +21,9 @@ from poli_insight.application.queries.page_queries import (
     AdminSessionDetail,
     AdminSessionSummary,
     AlgorithmImplementationOption,
+    AnalysisCaseView,
+    AnalysisLevelSummaryView,
+    AnalysisScopeView,
     AuthoredAnswerDetail,
     ConfiguredAlgorithmSummary,
     CriterionWeightDetail,
@@ -74,6 +77,7 @@ from poli_insight.domain.content_hash import hash_json
 from poli_insight.domain.enum import (
     AccessCodeMode,
     AlgorithmRole,
+    AnalysisCaseStatus,
     CriterionDataType,
     CriterionDirection,
     Discoverability,
@@ -96,6 +100,10 @@ from poli_insight.domain.enum import (
     ValidationStatus,
 )
 from poli_insight.infrastructure.database.json_codec import json_from_storage
+from poli_insight.infrastructure.database.models.analysis import (
+    AnalysisCaseRow,
+    AnalysisRunRow,
+)
 from poli_insight.infrastructure.database.models.audit import AuditEventRow
 from poli_insight.infrastructure.database.models.operations import (
     SubmissionReviewDecisionRow,
@@ -2737,6 +2745,258 @@ class SqlAlchemyPageQueries(PageQueries):
             raise PageQueryError("Ranking results could not be loaded.") from error
         return views
 
+    def list_analysis_cases(
+        self,
+        analysis_run_id: str,
+        *,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> PageResult[AnalysisCaseView]:
+        _validate_paging(page=page, page_size=page_size)
+        base = select(AnalysisCaseRow).where(
+            AnalysisCaseRow.analysis_run_id == analysis_run_id
+        )
+        if scope_type is not None:
+            base = base.where(AnalysisCaseRow.scope_type == scope_type)
+        if scope_id is not None:
+            base = base.where(AnalysisCaseRow.scope_id == scope_id)
+        try:
+            with self._session_factory() as database_session:
+                total = (
+                    database_session.scalar(
+                        select(func.count()).select_from(base.subquery())
+                    )
+                    or 0
+                )
+                rows = database_session.scalars(
+                    base.order_by(AnalysisCaseRow.sequence)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                ).all()
+                participant_ids = {
+                    row.subject_id
+                    for row in rows
+                    if row.subject_type == "participant" and row.subject_id
+                }
+                participant_aliases = {
+                    str(participant.participant_id): participant.alias
+                    for participant in database_session.scalars(
+                        select(ParticipantRow).where(
+                            ParticipantRow.participant_id.in_(participant_ids)
+                        )
+                    )
+                    if participant.alias is not None
+                }
+                group_ids = {
+                    row.scope_id
+                    for row in rows
+                    if row.scope_id
+                    and row.scope_type in {"stakeholder_group", "participant"}
+                } | {
+                    row.subject_id
+                    for row in rows
+                    if row.subject_id and row.subject_type == "stakeholder_group"
+                }
+                group_labels = {
+                    str(group.session_stakeholder_group_id): group.name
+                    for group in database_session.scalars(
+                        select(SessionStakeholderGroupRow).where(
+                            SessionStakeholderGroupRow.session_stakeholder_group_id.in_(
+                                group_ids
+                            )
+                        )
+                    )
+                }
+                criterion_ids = {
+                    row.subject_id
+                    for row in rows
+                    if row.subject_type == "criterion" and row.subject_id
+                }
+                criterion_labels = _criterion_labels(database_session, criterion_ids)
+                alternative_ids = {
+                    row.subject_id
+                    for row in rows
+                    if row.subject_type == "alternative" and row.subject_id
+                }
+                alternative_labels = {
+                    str(alternative_id): name
+                    for alternative_id, name in database_session.execute(
+                        select(
+                            ScenarioAlternativeRow.alternative_id,
+                            ScenarioAlternativeRow.name,
+                        ).where(
+                            ScenarioAlternativeRow.alternative_id.in_(alternative_ids)
+                        )
+                    )
+                }
+        except (SQLAlchemyError, ValueError, TypeError) as error:
+            raise PageQueryError("Analysis cases could not be loaded.") from error
+        items = tuple(
+            _analysis_case_view(
+                row,
+                participant_aliases=participant_aliases,
+                group_labels=group_labels,
+                criterion_labels=criterion_labels,
+                alternative_labels=alternative_labels,
+            )
+            for row in rows
+        )
+        return PageResult(items, page, page_size, int(total))
+
+    def list_analysis_scopes(
+        self, analysis_run_id: str
+    ) -> tuple[AnalysisScopeView, ...]:
+        try:
+            with self._session_factory() as database_session:
+                values = database_session.execute(
+                    select(
+                        AnalysisCaseRow.scope_type,
+                        AnalysisCaseRow.scope_id,
+                    )
+                    .where(AnalysisCaseRow.analysis_run_id == analysis_run_id)
+                    .distinct()
+                    .order_by(
+                        AnalysisCaseRow.scope_type,
+                        AnalysisCaseRow.scope_id,
+                    )
+                ).all()
+                group_ids = {
+                    scope_id
+                    for scope_type, scope_id in values
+                    if scope_id and scope_type in {"stakeholder_group", "participant"}
+                }
+                group_labels = {
+                    str(group.session_stakeholder_group_id): group.name
+                    for group in database_session.scalars(
+                        select(SessionStakeholderGroupRow).where(
+                            SessionStakeholderGroupRow.session_stakeholder_group_id.in_(
+                                group_ids
+                            )
+                        )
+                    )
+                }
+        except (SQLAlchemyError, ValueError, TypeError) as error:
+            raise PageQueryError("Analysis scopes could not be loaded.") from error
+        result = []
+        for scope_type, scope_id in values:
+            if scope_type == "session":
+                label = "Session aggregate"
+            elif scope_type == "stakeholder_group":
+                label = group_labels.get(scope_id, scope_id or "Stakeholder group")
+            elif scope_type == "participant":
+                label = group_labels.get(scope_id, scope_id or "Unknown group")
+            else:
+                label = scope_type.replace("_", " ").title()
+            result.append(AnalysisScopeView(scope_type, scope_id, label))
+        return tuple(result)
+
+    def summarize_analysis_level(
+        self,
+        analysis_run_id: str,
+        *,
+        result_level: str,
+        stakeholder_group_id: str | None = None,
+    ) -> AnalysisLevelSummaryView:
+        if result_level not in {"session", "stakeholder_group", "participant"}:
+            raise PageQueryError("Analysis result level is invalid.")
+        try:
+            with self._session_factory() as database_session:
+                method = database_session.scalar(
+                    select(AnalysisRunRow.method).where(
+                        AnalysisRunRow.analysis_run_id == analysis_run_id
+                    )
+                )
+                if method is None:
+                    raise PageQueryError("Analysis run was not found.")
+                case_scopes = (
+                    ("participant", "session")
+                    if method == "participant_influence" and result_level == "session"
+                    else (
+                        ("participant",)
+                        if method == "participant_influence"
+                        else (result_level,)
+                    )
+                )
+                statement = select(
+                    AnalysisCaseRow.status,
+                    AnalysisCaseRow.result_json,
+                    AnalysisCaseRow.warnings_json,
+                ).where(
+                    AnalysisCaseRow.analysis_run_id == analysis_run_id,
+                    AnalysisCaseRow.scope_type.in_(case_scopes),
+                )
+                if stakeholder_group_id is not None:
+                    statement = statement.where(
+                        AnalysisCaseRow.scope_id == stakeholder_group_id
+                    )
+                rows = database_session.execute(statement).all()
+                group_label = None
+                if stakeholder_group_id is not None:
+                    group_label = database_session.scalar(
+                        select(SessionStakeholderGroupRow.name).where(
+                            SessionStakeholderGroupRow.session_stakeholder_group_id
+                            == stakeholder_group_id
+                        )
+                    )
+        except PageQueryError:
+            raise
+        except (SQLAlchemyError, ValueError, TypeError) as error:
+            raise PageQueryError("Analysis summary could not be loaded.") from error
+
+        evaluated = not_evaluable = changes = reversals = maximum = warnings = 0
+        distribution: dict[int, int] = {}
+        for status, stored_results, stored_warnings in rows:
+            results = json_from_storage(stored_results)
+            candidates: tuple[object, ...]
+            if method == "participant_influence":
+                if result_level == "session":
+                    candidates = (results.get("session_metrics"),)
+                elif result_level == "stakeholder_group":
+                    candidates = (results.get("group_metrics"),)
+                else:
+                    candidates = (
+                        results.get("session_metrics"),
+                        results.get("group_metrics"),
+                    )
+            else:
+                candidates = (results.get("metrics"),)
+            metrics = tuple(item for item in candidates if isinstance(item, Mapping))
+            if status != AnalysisCaseStatus.EVALUATED.value or not metrics:
+                not_evaluable += 1
+            else:
+                evaluated += 1
+                changes += int(
+                    any(bool(item.get("top_set_changed")) for item in metrics)
+                )
+                reversals += sum(
+                    int(item.get("strict_reversals", 0)) for item in metrics
+                )
+                displacement = max(
+                    int(item.get("maximum_rank_displacement", 0)) for item in metrics
+                )
+                maximum = max(maximum, displacement)
+                distribution[displacement] = distribution.get(displacement, 0) + 1
+            warning_values = json_from_storage(stored_warnings).get("values", ())
+            if isinstance(warning_values, Sequence) and not isinstance(
+                warning_values, str
+            ):
+                warnings += len(warning_values)
+        return AnalysisLevelSummaryView(
+            result_level=result_level,
+            stakeholder_group_id=stakeholder_group_id,
+            stakeholder_group_label=group_label,
+            case_count=len(rows),
+            evaluated_count=evaluated,
+            not_evaluable_count=not_evaluable,
+            top_set_change_count=changes,
+            strict_reversal_count=reversals,
+            maximum_rank_displacement=maximum,
+            warning_count=warnings,
+            displacement_distribution=dict(sorted(distribution.items())),
+        )
+
     def list_active_algorithm_implementations(
         self,
         *,
@@ -4094,6 +4354,49 @@ def _ranking_result_view(
         alternatives=tuple(alternatives),
         diagnostics=json_from_storage(result.diagnostics_json),
         result_hash=result.result_hash,
+    )
+
+
+def _analysis_case_view(
+    row: AnalysisCaseRow,
+    *,
+    participant_aliases: Mapping[str, str],
+    group_labels: Mapping[str, str],
+    criterion_labels: Mapping[str, str],
+    alternative_labels: Mapping[str, str],
+) -> AnalysisCaseView:
+    subject_label = row.subject_id or row.subject_type.replace("_", " ").title()
+    if row.subject_type == "participant" and row.subject_id:
+        subject_label = participant_aliases.get(
+            row.subject_id, f"Participant {row.subject_id[-8:]}"
+        )
+    elif row.subject_type == "stakeholder_group" and row.subject_id:
+        subject_label = group_labels.get(row.subject_id, row.subject_id)
+    elif row.subject_type == "criterion" and row.subject_id:
+        subject_label = criterion_labels.get(row.subject_id, row.subject_id)
+    elif row.subject_type == "alternative" and row.subject_id:
+        subject_label = alternative_labels.get(row.subject_id, row.subject_id)
+    scope_label = (
+        group_labels.get(row.scope_id, row.scope_id)
+        if row.scope_id
+        else row.scope_type.replace("_", " ").title()
+    )
+    return AnalysisCaseView(
+        analysis_case_id=str(row.analysis_case_id),
+        sequence=row.sequence,
+        status=AnalysisCaseStatus(row.status),
+        scope_type=row.scope_type,
+        scope_id=row.scope_id,
+        scope_label=scope_label,
+        subject_type=row.subject_type,
+        subject_id=row.subject_id,
+        subject_label=subject_label,
+        inputs=json_from_storage(row.input_json),
+        results=json_from_storage(row.result_json),
+        warnings=tuple(
+            str(item) for item in json_from_storage(row.warnings_json).get("values", [])
+        ),
+        content_hash=row.content_hash,
     )
 
 

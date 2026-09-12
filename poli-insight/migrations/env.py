@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from poli_insight.config import Settings
 from poli_insight.infrastructure.database.base import Base
 from poli_insight.infrastructure.database.models import (
+    analysis,  # noqa: F401
     audit,  # noqa: F401
     operations,  # noqa: F401
     participation,  # noqa: F401

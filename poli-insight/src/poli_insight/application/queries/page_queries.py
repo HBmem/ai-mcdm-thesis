@@ -17,6 +17,7 @@ from typing import Protocol
 from poli_insight.domain.enum import (
     AccessCodeMode,
     AlgorithmRole,
+    AnalysisCaseStatus,
     CriterionDataType,
     CriterionDirection,
     Discoverability,
@@ -745,6 +746,56 @@ class RankingResultView:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisCaseView:
+    analysis_case_id: str
+    sequence: int
+    status: AnalysisCaseStatus
+    scope_type: str
+    scope_id: str | None
+    scope_label: str
+    subject_type: str
+    subject_id: str | None
+    subject_label: str
+    inputs: Mapping[str, object]
+    results: Mapping[str, object]
+    warnings: tuple[str, ...]
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "inputs", MappingProxyType(dict(self.inputs)))
+        object.__setattr__(self, "results", MappingProxyType(dict(self.results)))
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisScopeView:
+    scope_type: str
+    scope_id: str | None
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisLevelSummaryView:
+    result_level: str
+    stakeholder_group_id: str | None
+    stakeholder_group_label: str | None
+    case_count: int
+    evaluated_count: int
+    not_evaluable_count: int
+    top_set_change_count: int
+    strict_reversal_count: int
+    maximum_rank_displacement: int
+    warning_count: int
+    displacement_distribution: Mapping[int, int]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "displacement_distribution",
+            MappingProxyType(dict(self.displacement_distribution)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SessionAuditEventSummary:
     audit_event_id: str
     occurred_at: datetime
@@ -1121,6 +1172,28 @@ class PageQueries(Protocol):
         self,
         ranking_run_id: str,
     ) -> tuple[RankingResultView, ...]: ...
+
+    def list_analysis_cases(
+        self,
+        analysis_run_id: str,
+        *,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> PageResult[AnalysisCaseView]: ...
+
+    def list_analysis_scopes(
+        self, analysis_run_id: str
+    ) -> tuple[AnalysisScopeView, ...]: ...
+
+    def summarize_analysis_level(
+        self,
+        analysis_run_id: str,
+        *,
+        result_level: str,
+        stakeholder_group_id: str | None = None,
+    ) -> AnalysisLevelSummaryView: ...
 
     def get_session_algorithm_configuration(
         self,

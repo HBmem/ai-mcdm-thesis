@@ -63,6 +63,9 @@ from poli_insight.presentation.streamlit.components.session_search import (
     render_session_search,
 )
 from poli_insight.presentation.streamlit.context import PageContext
+from poli_insight.presentation.streamlit.pages.admin.analysis_section import (
+    render_analysis_stage,
+)
 
 _PAGE_SIZE = 10
 _STAGES = (
@@ -492,7 +495,13 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
                 read_only=read_only,
             )
         elif selected_index == 4:
-            _render_analysis_stage(runs, ranking_runs)
+            _render_analysis_stage(
+                context,
+                detail,
+                runs,
+                ranking_runs,
+                read_only=read_only,
+            )
         else:
             _render_package_stage(runs, ranking_runs)
     _render_bundle_preview(
@@ -2037,28 +2046,19 @@ def _ranking_level_description(level: str) -> str:
 
 
 def _render_analysis_stage(
+    context: PageContext,
+    detail: Any,
     runs: tuple[Any, ...],
     ranking_runs: tuple[Any, ...] = (),
+    *,
+    read_only: bool,
 ) -> None:
-    st.markdown("### Sensitivity and Robustness")
-    succeeded = any(run.status == RunStatus.SUCCEEDED for run in runs)
-    st.markdown("#### Required prerequisites")
-    ranking_succeeded = any(run.status == RunStatus.SUCCEEDED for run in ranking_runs)
-    st.markdown(
-        f"- Weighting artifact: {'available' if succeeded else 'required'}\n"
-        f"- Persisted ranking result: "
-        f"{'available' if ranking_succeeded else 'required'}\n"
-        "- Versioned analysis runner and result schema: not implemented"
-    )
-    st.markdown("#### Planned test types")
-    st.markdown(
-        "- Weight perturbation\n- Criterion removal\n- Rank stability\n"
-        "- Stakeholder influence"
-    )
-    render_capability_notice(
-        "Versioned analysis runs",
-        "No sensitivity or robustness executor and no persisted result schema "
-        "exist. No placeholder analysis is generated.",
+    render_analysis_stage(
+        context,
+        detail,
+        runs,
+        ranking_runs,
+        read_only=read_only,
     )
 
 
@@ -2104,8 +2104,10 @@ def _render_bundle_preview(
         submission_context,
         selected_stage=selected_stage,
     )
-    with admin_surface(key=f"bundle_{session_id}", variant="bundle_preview"):
-        st.markdown("### Current State of Final Bundle")
+    with (
+        admin_surface(key=f"bundle_{session_id}", variant="bundle_preview"),
+        st.expander("Current State of Final Bundle", expanded=False),
+    ):
         labels: dict[
             str,
             tuple[str, Literal["gray", "orange", "red", "green"]],

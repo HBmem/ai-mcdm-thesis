@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from poli_insight.infrastructure.database.repositories.algorithm_repository import (
     SqlAlchemyAlgorithmRepository,
 )
+from poli_insight.infrastructure.database.repositories.analysis_repository import (
+    SqlAlchemyAnalysisRunRepository,
+)
 from poli_insight.infrastructure.database.repositories.audit_repository import (
     SqlAlchemyAuditRepository,
 )
@@ -54,42 +57,23 @@ class SqlAlchemyUnitOfWork:
     def __enter__(self) -> Self:
         self.database_session = self._session_factory()
 
-        self.algorithms = SqlAlchemyAlgorithmRepository(
-            self.database_session
-        )
-        self.audit_events = SqlAlchemyAuditRepository(
-            self.database_session
-        )
-        self.scenarios = SqlAlchemyScenarioRepository(
-            self.database_session
-        )
-        self.session = SqlAlchemySessionRepository(
-            self.database_session
-        )
-        self.participants = SqlAlchemyParticipantRepository(
-            self.database_session
-        )
-        self.invitations = SqlAlchemySessionInvitationRepository(
-            self.database_session
-        )
+        self.algorithms = SqlAlchemyAlgorithmRepository(self.database_session)
+        self.analysis_runs = SqlAlchemyAnalysisRunRepository(self.database_session)
+        self.audit_events = SqlAlchemyAuditRepository(self.database_session)
+        self.scenarios = SqlAlchemyScenarioRepository(self.database_session)
+        self.session = SqlAlchemySessionRepository(self.database_session)
+        self.participants = SqlAlchemyParticipantRepository(self.database_session)
+        self.invitations = SqlAlchemySessionInvitationRepository(self.database_session)
         self.access_grants = SqlAlchemyParticipantAccessGrantRepository(
             self.database_session
         )
         self.access_codes = SqlAlchemyEnrollmentAccessCodeRepository(
             self.database_session
         )
-        self.access_attempts = SqlAlchemyAccessAttemptRepository(
-            self.database_session
-        )
-        self.consents = SqlAlchemyParticipantConsentRepository(
-            self.database_session
-        )
-        self.submissions = SqlAlchemySubmissionRepository(
-            self.database_session
-        )
-        self.validations = SqlAlchemyValidationRepository(
-            self.database_session
-        )
+        self.access_attempts = SqlAlchemyAccessAttemptRepository(self.database_session)
+        self.consents = SqlAlchemyParticipantConsentRepository(self.database_session)
+        self.submissions = SqlAlchemySubmissionRepository(self.database_session)
+        self.validations = SqlAlchemyValidationRepository(self.database_session)
         self.submission_reviews = SqlAlchemySubmissionReviewRepository(
             self.database_session
         )
@@ -102,12 +86,8 @@ class SqlAlchemyUnitOfWork:
         self.participant_identities = SqlAlchemyParticipantIdentityRepository(
             self.database_session
         )
-        self.processing_runs = SqlAlchemyProcessingRunRepository(
-            self.database_session
-        )
-        self.ranking_runs = SqlAlchemyRankingRunRepository(
-            self.database_session
-        )
+        self.processing_runs = SqlAlchemyProcessingRunRepository(self.database_session)
+        self.ranking_runs = SqlAlchemyRankingRunRepository(self.database_session)
 
         return self
 

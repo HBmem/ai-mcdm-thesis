@@ -15,6 +15,7 @@ from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import Session, sessionmaker
 
 from poli_insight.config import Settings
+from poli_insight.infrastructure.database.models import analysis as analysis_models
 from poli_insight.infrastructure.database.models import audit as audit_models
 from poli_insight.infrastructure.database.models import (
     operations as operations_models,
@@ -22,6 +23,7 @@ from poli_insight.infrastructure.database.models import (
 from poli_insight.infrastructure.database.models import (
     participation as participation_models,
 )
+from poli_insight.infrastructure.database.models import ranking as ranking_models
 from poli_insight.infrastructure.database.models import scenario as scenario_models
 from poli_insight.infrastructure.database.models import session as session_models
 from poli_insight.infrastructure.database.models import (
@@ -35,9 +37,11 @@ from poli_insight.infrastructure.database.models import (
 # startup. Keeping explicit aliases makes that side effect visible and prevents
 # formatters from treating the imports as accidentally unused.
 _REGISTERED_MODEL_MODULES = (
+    analysis_models,
     audit_models,
     operations_models,
     participation_models,
+    ranking_models,
     scenario_models,
     session_models,
     submission_models,

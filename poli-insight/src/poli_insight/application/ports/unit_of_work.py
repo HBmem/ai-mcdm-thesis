@@ -5,6 +5,7 @@ from typing import Protocol, Self
 from poli_insight.application.ports.algorithm_repository import (
     AlgorithmRepository,
 )
+from poli_insight.application.ports.analysis_repository import AnalysisRunRepository
 from poli_insight.application.ports.audit_repository import AuditEventRepository
 from poli_insight.application.ports.operations_repository import (
     InvitationImportRepository,
@@ -35,6 +36,7 @@ from poli_insight.application.ports.validation_repository import (
 
 
 class UnitOfWork(Protocol):
+    analysis_runs: AnalysisRunRepository
     algorithms: AlgorithmRepository
     audit_events: AuditEventRepository
     scenarios: ScenarioRepository
@@ -54,14 +56,10 @@ class UnitOfWork(Protocol):
     processing_runs: ProcessingRunRepository
     ranking_runs: RankingRunRepository
 
-    def __enter__(self) -> Self:
-        ...
+    def __enter__(self) -> Self: ...
 
-    def __exit__(self, exc_type, exc, tb) -> None:
-        ...
+    def __exit__(self, exc_type, exc, tb) -> None: ...
 
-    def commit(self) -> None:
-        ...
+    def commit(self) -> None: ...
 
-    def rollback(self) -> None:
-        ...
+    def rollback(self) -> None: ...

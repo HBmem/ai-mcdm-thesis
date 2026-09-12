@@ -4,7 +4,6 @@ This module provides the enums for the project.
 Enums values are persistent database/API values.
 """
 
-
 from enum import StrEnum
 
 
@@ -12,15 +11,18 @@ class ScenarioDefinitionStatus(StrEnum):
     ACTIVE = "active"
     RETIRED = "retired"
 
+
 class ScenarioSnapshotStatus(StrEnum):
     VALIDATING = "validating"
     READY = "ready"
     INVALID = "invalid"
     RETIRED = "retired"
 
+
 class ScenarioType(StrEnum):
     STANDARD = "standard"
     HIERARCHICAL = "hierarchical"
+
 
 class ScenarioFileRole(StrEnum):
     SCENARIO_CONFIG = "scenario_config"
@@ -33,15 +35,18 @@ class ScenarioFileRole(StrEnum):
     CUSTOM_FUNCTION = "custom_function"
     OTHER = "other"
 
+
 class CriterionDirection(StrEnum):
     COST = "cost"
     BENEFIT = "benefit"
+
 
 class CriterionDataType(StrEnum):
     NUMERIC = "numeric"
     ORDINAL = "ordinal"
     CATEGORICAL = "categorical"
     BOOLEAN = "boolean"
+
 
 class SessionStatus(StrEnum):
     DRAFT = "draft"
@@ -52,38 +57,46 @@ class SessionStatus(StrEnum):
     CANCELED = "canceled"
     ARCHIVED = "archived"
 
+
 class Discoverability(StrEnum):
     LISTED = "listed"
     UNLISTED = "unlisted"
 
+
 class EnrollmentMode(StrEnum):
     OPEN = "open"
     INVITATION_ONLY = "invitation_only"
+
 
 class AccessCodeMode(StrEnum):
     NONE = "none"
     SHARED_SESSION_CODE = "shared_session_code"
     PER_INVITATION_CODE = "per_invitation_code"
 
+
 class StakeholderSelectionMode(StrEnum):
     SELF_SELECT = "self_select"
     INVITATION_ASSIGNED = "invitation_assigned"
     MODERATOR_ASSIGNED = "moderator_assigned"
+
 
 class ResponseFormat(StrEnum):
     PAIRWISE = "pairwise"
     DIRECT_RATING = "direct_rating"
     DIRECT_RANKING = "direct_ranking"
 
+
 class ResponseTargetType(StrEnum):
     CRITERION = "criterion"
     ALTERNATIVE = "alternative"
+
 
 class QuestionType(StrEnum):
     CRITERION_PAIR = "criterion_pair"
     CRITERION_RATING = "criterion_rating"
     ALTERNATIVE_RATING = "alternative_rating"
-    ALTERNATIVE_RANK = "alternative_rank" # Might not use this in the future
+    ALTERNATIVE_RANK = "alternative_rank"  # Might not use this in the future
+
 
 class AlgorithmRole(StrEnum):
     WEIGHTING = "weighting"
@@ -93,15 +106,18 @@ class AlgorithmRole(StrEnum):
     VALIDATION = "validation"
     ANALYSIS = "analysis"
 
+
 # Changed when new algorithm providers are used
 class AlgorithmProvider(StrEnum):
     PYDECISION = "pydecision"
-    INTERNAL = "internal" # will not be used for the thesis
+    INTERNAL = "internal"  # will not be used for the thesis
+
 
 class ParticipantAccessStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
     WITHDRAWN = "withdrawn"
+
 
 class ParticipantProgressStatus(StrEnum):
     INVITED = "invited"
@@ -109,6 +125,7 @@ class ParticipantProgressStatus(StrEnum):
     STARTED = "started"
     SUBMITTED = "submitted"
     COMPLETED = "completed"
+
 
 class InvitationStatus(StrEnum):
     PENDING = "pending"
@@ -118,11 +135,13 @@ class InvitationStatus(StrEnum):
     REVOKED = "revoked"
     DELIVERY_FAILED = "delivery_failed"
 
+
 class SubmissionStatus(StrEnum):
     DRAFT = "draft"
     SUBMITTED = "submitted"
     SUPERSEDED = "superseded"
     WITHDRAWN = "withdrawn"
+
 
 class ValidationStatus(StrEnum):
     PENDING = "pending"
@@ -132,16 +151,19 @@ class ValidationStatus(StrEnum):
     INVALID = "invalid"
     ERROR = "error"
 
+
 class SubmissionReviewStatus(StrEnum):
     PENDING = "pending"
     NEEDS_REVIEW = "needs_review"
     ACCEPTED = "accepted"
     REJECTED = "rejected"
 
+
 class MessageSeverity(StrEnum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+
 
 class RunStatus(StrEnum):
     QUEUED = "queued"
@@ -151,6 +173,7 @@ class RunStatus(StrEnum):
     CANCELED = "canceled"
     AWAITING_REVIEW = "awaiting_review"
     STALE = "stale"
+
 
 class RunInclusionStatus(StrEnum):
     PENDING_REVIEW = "pending_review"
@@ -163,10 +186,12 @@ class RunInclusionStatus(StrEnum):
     EXCLUDED_MODERATOR = "excluded_moderator"
     EXCLUDED_ERROR = "excluded_error"
 
+
 class MissingGroupPolicy(StrEnum):
     FAIL = "fail"
     EXCLUDED_RENORMALIZED = "exclude_and_renormalize"
     ZERO_CONTRIBUTION = "zero_contribution"
+
 
 class AnalysisType(StrEnum):
     SENSITIVITY = "sensitivity"
@@ -175,6 +200,20 @@ class AnalysisType(StrEnum):
     PARTICIPANT_IMPACT = "participant_impact"
     COMMENT_SUMMARY = "comment_summary"
     CUSTOM = "custom"
+
+
+class AnalysisMethod(StrEnum):
+    ONE_AT_A_TIME_WEIGHT_PERTURBATION = "one_at_a_time_weight_perturbation"
+    CRITERION_REMOVAL = "criterion_removal"
+    RANK_REVERSAL = "rank_reversal"
+    STAKEHOLDER_GROUP_INFLUENCE = "stakeholder_group_influence"
+    PARTICIPANT_INFLUENCE = "participant_influence"
+
+
+class AnalysisCaseStatus(StrEnum):
+    EVALUATED = "evaluated"
+    NOT_EVALUABLE = "not_evaluable"
+
 
 class ArtifactType(StrEnum):
     INPUT_MANIFEST = "input_manifest"
@@ -189,11 +228,13 @@ class ArtifactType(StrEnum):
     LOG = "log"
     OTHER = "other"
 
+
 class ReportAudience(StrEnum):
     STAKEHOLDER_GROUP = "stakeholder_group"
     MODERATOR = "moderator"
     PARTICIPANT = "participant"
     PUBLIC = "public"
+
 
 class ReportApprovalStatus(StrEnum):
     DRAFT = "draft"
@@ -202,6 +243,7 @@ class ReportApprovalStatus(StrEnum):
     REJECTED = "rejected"
     WITHDRAWN = "withdrawn"
 
+
 class ActorType(StrEnum):
     USER = "user"
     PARTICIPANT = "participant"
@@ -209,6 +251,7 @@ class ActorType(StrEnum):
     AI_SERVICE = "ai_service"
     IMPORT_PROCESS = "import_process"
     API_CLIENT = "api_client"
+
 
 class AuditAction(StrEnum):
     CREATED = "created"

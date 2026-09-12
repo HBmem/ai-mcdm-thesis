@@ -682,7 +682,12 @@ class SessionProcessingPageTests(unittest.TestCase):
         self.assertIn("Create Ranking", markdown)
         self.assertIn("Session Processing Steps", markdown)
         self.assertIn("Session Processing Details", markdown)
-        self.assertIn("Current State of Final Bundle", markdown)
+        bundle_preview = next(
+            item
+            for item in app.expander
+            if item.label == "Current State of Final Bundle"
+        )
+        self.assertFalse(bundle_preview.proto.expanded)
         self.assertNotIn("Generate weights", tuple(item.label for item in app.button))
 
     def test_matrix_browser_exposes_evidence_charts_and_safe_downloads(self) -> None:
