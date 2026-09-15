@@ -33,12 +33,25 @@ def test_analysis_mapper_round_trips_decimal_cases_and_artifacts() -> None:
         result_json={"metrics": {"kendall_tau_b": Decimal("0.8")}},
         warnings=(),
     )
-    artifact = AnalysisArtifact.create(
-        analysis_artifact_id=str(uuid4()),
-        analysis_run_id=run_id,
-        artifact_type=ArtifactType.STRUCTURED_RESULT,
-        schema_version=1,
-        content_json={"summary": {"case_count": 1}},
+    artifacts = tuple(
+        AnalysisArtifact.create(
+            analysis_artifact_id=str(uuid4()),
+            analysis_run_id=run_id,
+            artifact_type=artifact_type,
+            schema_version=1,
+            content_json=content,
+        )
+        for artifact_type, content in (
+            (ArtifactType.INPUT_MANIFEST, {"input_hash": "c" * 64}),
+            (
+                ArtifactType.STRUCTURED_RESULT,
+                {"summary": {"case_count": 1}},
+            ),
+            (
+                ArtifactType.ANALYSIS_BUNDLE,
+                {"participant_identifiers_included": False},
+            ),
+        )
     )
     now = datetime(2026, 9, 8, tzinfo=UTC)
     run = AnalysisRun.succeeded(
@@ -59,7 +72,7 @@ def test_analysis_mapper_round_trips_decimal_cases_and_artifacts() -> None:
         completed_at=now,
         correlation_id="correlation-1",
         cases=(case,),
-        artifacts=(artifact,),
+        artifacts=artifacts,
     )
 
     row = analysis_run_to_row(run)

@@ -1,5 +1,6 @@
 from poli_insight.presentation.streamlit.urls import (
     private_invitation_url,
+    private_results_url,
     private_resume_url,
 )
 
@@ -26,8 +27,7 @@ def test_private_resume_url_appends_participation_route_to_application_root() ->
     )
 
     assert url == (
-        "http://localhost:8501/participate?"
-        "session=test4&access=private-token"
+        "http://localhost:8501/participate?session=test4&access=private-token"
     )
 
 
@@ -62,4 +62,17 @@ def test_private_invitation_url_is_complete_and_encoded() -> None:
         "https://research.example.test/poli-insight/participate?"
         "session=budget+study%2F2026&"
         "invitation=invite%2Btoken%2Fwith%3Fdelimiters"
+    )
+
+
+def test_private_results_url_uses_results_route_and_encodes_credentials() -> None:
+    url = private_results_url(
+        "https://research.example.test/poli-insight",
+        session_slug="budget study/2026",
+        access_token="token+private/value",
+    )
+
+    assert url == (
+        "https://research.example.test/poli-insight/results?"
+        "session=budget+study%2F2026&access=token%2Bprivate%2Fvalue"
     )

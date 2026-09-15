@@ -215,6 +215,22 @@ class AnalysisCaseStatus(StrEnum):
     NOT_EVALUABLE = "not_evaluable"
 
 
+class BundleVariant(StrEnum):
+    ANONYMOUS = "anonymous"
+    PUBLIC = "public"
+
+
+class PackageArtifactType(StrEnum):
+    INPUT_MANIFEST = "input_manifest"
+    COMMON_SECTION = "common_section"
+    VARIANT_MANIFEST = "variant_manifest"
+
+
+class ParticipantReleaseStatus(StrEnum):
+    ACTIVE = "active"
+    WITHDRAWN = "withdrawn"
+
+
 class ArtifactType(StrEnum):
     INPUT_MANIFEST = "input_manifest"
     DECISION_MATRIX = "decision_matrix"
@@ -272,6 +288,7 @@ class AuditAction(StrEnum):
     EXCLUDED = "excluded"
     PROCESSED = "processed"
     ANALYZED = "analyzed"
+    PACKAGED = "packaged"
     APPROVED = "approved"
     PUBLISHED = "published"
     WITHDRAWN = "withdrawn"

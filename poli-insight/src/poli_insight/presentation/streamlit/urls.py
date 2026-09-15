@@ -37,6 +37,28 @@ def private_invitation_url(
     )
 
 
+def private_results_url(
+    public_base_url: str,
+    *,
+    session_slug: str,
+    access_token: str,
+) -> str:
+    """Build a participant-only released-results URL."""
+
+    normalized_base = public_base_url.rstrip("/")
+    results_base = (
+        normalized_base
+        if normalized_base.endswith("/results")
+        else f"{normalized_base}/results"
+    )
+    query = urlencode(
+        {"session": session_slug, "access": access_token},
+        doseq=False,
+        safe="",
+    )
+    return f"{results_base}?{query}"
+
+
 def _participation_url(
     public_base_url: str,
     *,

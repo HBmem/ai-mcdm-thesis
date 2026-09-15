@@ -45,7 +45,10 @@ from poli_insight.presentation.streamlit.components.layout import (
     render_page_header,
 )
 from poli_insight.presentation.streamlit.context import PageContext
-from poli_insight.presentation.streamlit.urls import private_resume_url
+from poli_insight.presentation.streamlit.urls import (
+    private_results_url,
+    private_resume_url,
+)
 
 _SEARCH_KEY = "participate:search"
 _PAIRWISE_LEFT_KEY = "participate:pairwise-left"
@@ -91,7 +94,9 @@ def _render_catalog(context: PageContext) -> None:
         )
     )
 
-    invite, public = st.columns([0.4,0.6], )
+    invite, public = st.columns(
+        [0.4, 0.6],
+    )
 
     with invite, st.container(border=True):
         st.subheader("Have an invitation or private resume link?", anchor=False)
@@ -160,7 +165,9 @@ def _render_session_card(
             if session.description:
                 st.write(session.description)
             else:
-                st.write("This study has no description. Contact the researcher for details.")
+                st.write(
+                    "This study has no description. Contact the researcher for details."
+                )
 
         if st.button(
             "View study",
@@ -410,7 +417,10 @@ def _render_authenticated_workspace(context: PageContext, access_token: str) -> 
         )
     )
     if workspace.submission_status == SubmissionStatus.SUBMITTED:
-        _render_completion(workspace)
+        _render_completion(
+            workspace,
+            results_url=_released_results_url(context, workspace, access_token),
+        )
         return
     if not workspace.questions:
         st.error(
@@ -458,7 +468,10 @@ def _render_authenticated_workspace(context: PageContext, access_token: str) -> 
             refreshed is not None
             and refreshed.submission_status == SubmissionStatus.SUBMITTED
         ):
-            _render_completion(refreshed)
+            _render_completion(
+                refreshed,
+                results_url=_released_results_url(context, refreshed, access_token),
+            )
         else:
             st.info("Review and submit your questionnaire to complete participation.")
 
@@ -726,7 +739,11 @@ def _render_review(
         st.rerun()
 
 
-def _render_completion(workspace: ParticipationWorkspace) -> None:
+def _render_completion(
+    workspace: ParticipationWorkspace,
+    *,
+    results_url: str | None = None,
+) -> None:
     st.success(
         "Your questionnaire has been submitted successfully.",
         icon=":material/check_circle:",
@@ -738,6 +755,29 @@ def _render_completion(workspace: ParticipationWorkspace) -> None:
     )
     if workspace.submission_id:
         st.caption(f"Submission reference: `{workspace.submission_id}`")
+    if results_url:
+        st.link_button(
+            "View released results",
+            results_url,
+            icon=":material/analytics:",
+            type="primary",
+        )
+
+
+def _released_results_url(
+    context: PageContext,
+    workspace: ParticipationWorkspace,
+    access_token: str,
+) -> str | None:
+    if not context.container.packages.participant_access.available(
+        workspace.participant_id
+    ):
+        return None
+    return private_results_url(
+        context.container.settings.public_base_url,
+        session_slug=workspace.session.public_slug,
+        access_token=access_token,
+    )
 
 
 def _required_complete(

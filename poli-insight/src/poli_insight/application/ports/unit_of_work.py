@@ -25,6 +25,10 @@ from poli_insight.application.ports.participation_access import (
 )
 from poli_insight.application.ports.processing_repository import ProcessingRunRepository
 from poli_insight.application.ports.ranking_repository import RankingRunRepository
+from poli_insight.application.ports.result_package_repository import (
+    ParticipantResultReleaseRepository,
+    ResultPackageRepository,
+)
 from poli_insight.application.ports.scenario_repository import ScenarioRepository
 from poli_insight.application.ports.session_repository import SessionRepository
 from poli_insight.application.ports.submission_repository import (
@@ -55,6 +59,8 @@ class UnitOfWork(Protocol):
     participant_identities: ParticipantIdentityRepository
     processing_runs: ProcessingRunRepository
     ranking_runs: RankingRunRepository
+    result_packages: ResultPackageRepository
+    participant_result_releases: ParticipantResultReleaseRepository
 
     def __enter__(self) -> Self: ...
 

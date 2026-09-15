@@ -55,7 +55,6 @@ from poli_insight.presentation.streamlit.components.layout import (
     admin_surface,
     format_datetime,
     render_admin_surface_styles,
-    render_capability_notice,
     render_empty_state,
     render_page_header,
 )
@@ -65,6 +64,9 @@ from poli_insight.presentation.streamlit.components.session_search import (
 from poli_insight.presentation.streamlit.context import PageContext
 from poli_insight.presentation.streamlit.pages.admin.analysis_section import (
     render_analysis_stage,
+)
+from poli_insight.presentation.streamlit.pages.admin.package_section import (
+    render_package_stage,
 )
 
 _PAGE_SIZE = 10
@@ -273,7 +275,7 @@ def _render_processing_session_card(
                 icon=":material/route:",
                 color="primary",
             )
-        facts = st.columns(5)
+        facts = st.columns(6)
         facts[0].caption("Submitted evidence")
         facts[0].markdown(f"**{item.effective_submission_count}**")
         facts[1].caption("Latest run")
@@ -286,6 +288,8 @@ def _render_processing_session_card(
         )
         facts[4].caption("Latest ranking")
         facts[4].markdown(f"**{_latest_ranking_label(item)}**")
+        facts[5].caption("Final package")
+        facts[5].markdown(f"**{_latest_package_label(item)}**")
         footer = st.columns((0.72, 0.28), vertical_alignment="bottom")
         with footer[0]:
             timezone_name = getattr(
@@ -351,6 +355,17 @@ def _latest_run_label(item: ProcessingSessionSummary) -> str:
     return f"Run {item.latest_run_number} · {status}"
 
 
+def _latest_package_label(item: ProcessingSessionSummary) -> str:
+    if item.latest_package_run_number is None:
+        return "Not created"
+    status = (
+        "Unknown"
+        if item.latest_package_run_status is None
+        else item.latest_package_run_status.value.replace("_", " ").title()
+    )
+    return f"Run {item.latest_package_run_number} · {status}"
+
+
 def _latest_ranking_label(item: ProcessingSessionSummary) -> str:
     if item.latest_ranking_run_number is None:
         return "Not generated"
@@ -383,6 +398,8 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
     try:
         runs = context.container.validation.list_bundles.execute(session_id)
         ranking_runs = _list_ranking_runs(context, session_id)
+        analysis_runs = _list_analysis_runs(context, session_id)
+        package_runs = _list_package_runs(context, session_id)
         submission_context = context.queries.get_processing_submission_context(
             session_id
         )
@@ -398,7 +415,9 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
         st.session_state.get("processing:workspace_mode")
         == ProcessingQueueMode.PROCESSED.value
     )
-    current_index = _current_stage_index(overview, runs, ranking_runs)
+    current_index = _current_stage_index(
+        overview, runs, ranking_runs, analysis_runs, package_runs
+    )
     selected_index = max(
         0,
         min(
@@ -437,6 +456,8 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
             overview=overview,
             runs=runs,
             ranking_runs=ranking_runs,
+            analysis_runs=analysis_runs,
+            package_runs=package_runs,
         )
         controls = st.columns((0.2, 0.6, 0.2))
         if controls[0].button(
@@ -503,12 +524,22 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
                 read_only=read_only,
             )
         else:
-            _render_package_stage(runs, ranking_runs)
+            render_package_stage(
+                context,
+                detail,
+                overview,
+                runs,
+                ranking_runs,
+                analysis_runs,
+                package_runs,
+                read_only=overview.session_status == SessionStatus.ARCHIVED,
+            )
     _render_bundle_preview(
         detail,
         overview,
         runs,
         ranking_runs,
+        package_runs,
         submission_context=submission_context,
         selected_stage=selected_index,
     )
@@ -518,11 +549,30 @@ def _current_stage_index(
     overview: SessionValidationOverview,
     runs: tuple[Any, ...],
     ranking_runs: tuple[Any, ...] = (),
+    analysis_runs: tuple[Any, ...] = (),
+    package_runs: tuple[Any, ...] = (),
 ) -> int:
     current_weighting = next(
         (run for run in runs if run.status == RunStatus.SUCCEEDED),
         None,
     )
+    successful_ranking = next(
+        (
+            run
+            for run in ranking_runs
+            if run.status == RunStatus.SUCCEEDED
+            and run.roster_hash == overview.current_roster_hash
+            and current_weighting is not None
+            and run.source_processing_run_id == current_weighting.processing_run_id
+        ),
+        None,
+    )
+    if successful_ranking is not None and any(
+        run.status == RunStatus.SUCCEEDED
+        and run.source_ranking_run_id == successful_ranking.ranking_run_id
+        for run in analysis_runs
+    ):
+        return 5
     if any(
         run.status == RunStatus.SUCCEEDED
         and run.roster_hash == overview.current_roster_hash
@@ -552,6 +602,8 @@ def _render_stage_badges(
     overview: SessionValidationOverview,
     runs: tuple[Any, ...],
     ranking_runs: tuple[Any, ...] = (),
+    analysis_runs: tuple[Any, ...] = (),
+    package_runs: tuple[Any, ...] = (),
 ) -> None:
     statuses = _stage_statuses(
         selected_index=selected_index,
@@ -559,6 +611,8 @@ def _render_stage_badges(
         overview=overview,
         runs=runs,
         ranking_runs=ranking_runs,
+        analysis_runs=analysis_runs,
+        package_runs=package_runs,
     )
     columns = st.columns(6)
     colors: dict[
@@ -586,6 +640,8 @@ def _stage_statuses(
     overview: SessionValidationOverview,
     runs: tuple[Any, ...],
     ranking_runs: tuple[Any, ...] = (),
+    analysis_runs: tuple[Any, ...] = (),
+    package_runs: tuple[Any, ...] = (),
 ) -> tuple[str, ...]:
     latest = runs[0] if runs else None
     latest_ranking = ranking_runs[0] if ranking_runs else None
@@ -601,8 +657,12 @@ def _stage_statuses(
             and latest_ranking.status == RunStatus.FAILED
         ) or (latest is not None and latest.status == RunStatus.FAILED and index >= 1):
             values.append("failed")
-        elif index >= 4:
-            values.append("unavailable")
+        elif index == 5 and any(
+            item.status == RunStatus.SUCCEEDED for item in package_runs
+        ):
+            values.append("completed")
+        elif index >= 4 and index != selected_index:
+            values.append("blocked")
         elif index == 0 and not (
             overview.session_status in {SessionStatus.CLOSED, SessionStatus.ARCHIVED}
             and overview.has_active_configuration
@@ -619,6 +679,22 @@ def _stage_statuses(
 def _list_ranking_runs(context: PageContext, session_id: str) -> tuple[Any, ...]:
     ranking_use_cases = getattr(context.container, "ranking", None)
     list_runs = getattr(ranking_use_cases, "list_runs", None)
+    if list_runs is None:
+        return ()
+    return tuple(list_runs.execute(session_id))
+
+
+def _list_analysis_runs(context: PageContext, session_id: str) -> tuple[Any, ...]:
+    analysis_use_cases = getattr(context.container, "analysis", None)
+    list_runs = getattr(analysis_use_cases, "list_runs", None)
+    if list_runs is None:
+        return ()
+    return tuple(list_runs.execute(session_id))
+
+
+def _list_package_runs(context: PageContext, session_id: str) -> tuple[Any, ...]:
+    package_use_cases = getattr(context.container, "packages", None)
+    list_runs = getattr(package_use_cases, "list_runs", None)
     if list_runs is None:
         return ()
     return tuple(list_runs.execute(session_id))
@@ -2062,35 +2138,12 @@ def _render_analysis_stage(
     )
 
 
-def _render_package_stage(
-    runs: tuple[Any, ...],
-    ranking_runs: tuple[Any, ...] = (),
-) -> None:
-    st.markdown("### Package Results")
-    weighting_available = any(run.status == RunStatus.SUCCEEDED for run in runs)
-    if weighting_available:
-        st.warning(
-            "A deterministic weighting artifact exists, but it is incomplete and "
-            "identity-bearing. It is not an AI-safe reporting package and is not "
-            "offered for final-package download."
-        )
-    if any(run.status == RunStatus.SUCCEEDED for run in ranking_runs):
-        st.info(
-            "Deterministic ranking evidence also exists, but sensitivity evidence "
-            "and an AI-safe final package are still unavailable."
-        )
-    render_capability_notice(
-        "Final AI-safe package",
-        "No persisted end-to-end final-package marker or AI-safe reporting "
-        "adapter exists. Sensitivity evidence is also unavailable.",
-    )
-
-
 def _render_bundle_preview(
     detail: Any,
     overview: SessionValidationOverview,
     runs: tuple[Any, ...],
     ranking_runs: tuple[Any, ...] = (),
+    package_runs: tuple[Any, ...] = (),
     *,
     selected_stage: int,
     submission_context: ProcessingSubmissionContext | None,
@@ -2103,6 +2156,7 @@ def _render_bundle_preview(
         ranking_runs,
         submission_context,
         selected_stage=selected_stage,
+        package_runs=package_runs,
     )
     with (
         admin_surface(key=f"bundle_{session_id}", variant="bundle_preview"),
@@ -2154,6 +2208,7 @@ def _build_bundle_preview(
     submission_context: ProcessingSubmissionContext | None,
     *,
     selected_stage: int,
+    package_runs: tuple[Any, ...] = (),
 ) -> tuple[str, dict[str, object]]:
     latest = runs[0] if runs else None
     successful = next(
@@ -2197,8 +2252,32 @@ def _build_bundle_preview(
             or successful is None
             or ranking_runs[0].source_processing_run_id != successful.processing_run_id
         )
+    successful_package = next(
+        (item for item in package_runs if item.status == RunStatus.SUCCEEDED), None
+    )
+    if successful_package is not None:
+        package_configuration = next(
+            (
+                item.content_json.get("configuration_version_id")
+                for item in getattr(successful_package, "artifacts", ())
+                if getattr(item, "name", None) == "02_configuration"
+            ),
+            None,
+        )
+        current_configuration = (
+            None
+            if detail.configuration is None
+            else detail.configuration.configuration_version_id
+        )
+        stale = (
+            stale
+            or successful_package.source_roster_hash != overview.current_roster_hash
+            or package_configuration != current_configuration
+        )
     if stale:
         state = "stale"
+    elif successful_package is not None:
+        state = "finalized"
     elif artifact is not None:
         state = "stage_finalized"
     elif run is not None or overview.effective_submitted_count:
@@ -2226,6 +2305,16 @@ def _build_bundle_preview(
             "current_roster_hash": overview.current_roster_hash,
         },
     }
+    if successful_package is not None:
+        payload["overall_package_complete"] = True
+        payload["final_package"] = {
+            "package_run_id": successful_package.package_run_id,
+            "run_number": successful_package.run_number,
+            "variants": [item.value for item in successful_package.variants],
+            "input_hash": successful_package.input_hash,
+            "output_hash": successful_package.output_hash,
+            "analysis_run_count": len(successful_package.source_analysis_run_ids),
+        }
     if selected_stage >= 1:
         payload["aggregate_validation"] = {
             "current_submitted": overview.effective_submitted_count,
@@ -2283,6 +2372,10 @@ def _build_bundle_preview(
         completeness = payload.setdefault("completeness", {})
         if isinstance(completeness, dict):
             completeness["ranking"] = successful_ranking is not None
+            completeness["sensitivity_and_robustness"] = bool(
+                successful_package and successful_package.source_analysis_run_ids
+            )
+            completeness["final_package"] = successful_package is not None
     return state, payload
 
 

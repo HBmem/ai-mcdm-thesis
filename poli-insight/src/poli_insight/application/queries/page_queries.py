@@ -643,6 +643,12 @@ class ProcessingSessionSummary:
     successful_ranking_run_count: int = 0
     latest_ranking_roster_hash: str | None = None
     latest_ranking_source_processing_run_id: str | None = None
+    latest_package_run_id: str | None = None
+    latest_package_run_number: int | None = None
+    latest_package_run_status: RunStatus | None = None
+    latest_package_activity_at: datetime | None = None
+    successful_package_run_count: int = 0
+    active_configuration_version_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

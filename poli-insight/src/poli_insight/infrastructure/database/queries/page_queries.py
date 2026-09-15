@@ -123,6 +123,9 @@ from poli_insight.infrastructure.database.models.ranking import (
     RankingResultRow,
     RankingRunRow,
 )
+from poli_insight.infrastructure.database.models.result_package import (
+    ResultPackageRunRow,
+)
 from poli_insight.infrastructure.database.models.scenario import (
     ScenarioAlternativeRow,
     ScenarioCriterionRow,
@@ -2273,10 +2276,6 @@ class SqlAlchemyPageQueries(PageQueries):
         page_size: int = DEFAULT_PAGE_SIZE,
     ) -> PageResult[ProcessingSessionSummary]:
         _validate_paging(page=page, page_size=page_size)
-        if mode == ProcessingQueueMode.PROCESSED:
-            # No persisted end-to-end package contract exists yet. A successful
-            # weighting artifact is deliberately not treated as workflow completion.
-            return PageResult((), page, page_size, 0)
         query_filters = _session_filters(
             session_filters=filters,
             search=None,
@@ -2302,6 +2301,15 @@ class SqlAlchemyPageQueries(PageQueries):
             .scalar_subquery()
         )
         latest_ranking = aliased(RankingRunRow)
+        latest_package_id = (
+            select(ResultPackageRunRow.package_run_id)
+            .where(ResultPackageRunRow.session_id == SessionRow.session_id)
+            .order_by(ResultPackageRunRow.run_number.desc())
+            .limit(1)
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
+        latest_package = aliased(ResultPackageRunRow)
         successful_count = (
             select(func.count())
             .select_from(ProcessingRunRow)
@@ -2333,6 +2341,16 @@ class SqlAlchemyPageQueries(PageQueries):
             .correlate(SessionRow)
             .scalar_subquery()
         )
+        successful_package_count = (
+            select(func.count())
+            .select_from(ResultPackageRunRow)
+            .where(
+                ResultPackageRunRow.session_id == SessionRow.session_id,
+                ResultPackageRunRow.status == RunStatus.SUCCEEDED.value,
+            )
+            .correlate(SessionRow)
+            .scalar_subquery()
+        )
         submission_count = (
             select(func.count())
             .select_from(SubmissionRow)
@@ -2350,7 +2368,7 @@ class SqlAlchemyPageQueries(PageQueries):
                     latest_run_id.is_(None),
                 )
             )
-        else:
+        elif mode == ProcessingQueueMode.IN_PROGRESS:
             query_filters.extend(
                 (
                     SessionRow.status.in_(
@@ -2360,6 +2378,16 @@ class SqlAlchemyPageQueries(PageQueries):
                         )
                     ),
                     latest_run_id.is_not(None),
+                    successful_package_count == 0,
+                )
+            )
+        else:
+            query_filters.extend(
+                (
+                    SessionRow.status.in_(
+                        (SessionStatus.CLOSED.value, SessionStatus.ARCHIVED.value)
+                    ),
+                    successful_package_count > 0,
                 )
             )
         if filters.processing_states:
@@ -2410,6 +2438,11 @@ class SqlAlchemyPageQueries(PageQueries):
                     "latest_ranking_source_processing_run_id"
                 ),
                 latest_successful_run_id.label("latest_successful_run_id"),
+                successful_package_count.label("successful_package_run_count"),
+                latest_package.package_run_id.label("latest_package_run_id"),
+                latest_package.run_number.label("latest_package_run_number"),
+                latest_package.status.label("latest_package_run_status"),
+                latest_package.completed_at.label("latest_package_activity_at"),
                 func.coalesce(
                     latest_run.completed_at,
                     latest_run.created_at,
@@ -2426,6 +2459,10 @@ class SqlAlchemyPageQueries(PageQueries):
             .outerjoin(
                 latest_ranking,
                 latest_ranking.ranking_run_id == latest_ranking_id,
+            )
+            .outerjoin(
+                latest_package,
+                latest_package.package_run_id == latest_package_id,
             )
             .where(*query_filters)
         )
@@ -2485,6 +2522,7 @@ class SqlAlchemyPageQueries(PageQueries):
                         for value in (
                             row.last_processing_activity_at,
                             row.latest_ranking_activity_at,
+                            row.latest_package_activity_at,
                         )
                         if value is not None
                     ),
@@ -2519,6 +2557,24 @@ class SqlAlchemyPageQueries(PageQueries):
                         None
                         if row.latest_ranking_source_processing_run_id is None
                         else str(row.latest_ranking_source_processing_run_id)
+                    ),
+                    latest_package_run_id=(
+                        None
+                        if row.latest_package_run_id is None
+                        else str(row.latest_package_run_id)
+                    ),
+                    latest_package_run_number=row.latest_package_run_number,
+                    latest_package_run_status=(
+                        None
+                        if row.latest_package_run_status is None
+                        else RunStatus(row.latest_package_run_status)
+                    ),
+                    latest_package_activity_at=row.latest_package_activity_at,
+                    successful_package_run_count=int(row.successful_package_run_count),
+                    active_configuration_version_id=(
+                        None
+                        if row.SessionRow.active_configuration_version_id is None
+                        else str(row.SessionRow.active_configuration_version_id)
                     ),
                 )
             )
@@ -4268,6 +4324,8 @@ def _processing_next_stage(
     row: Any,
     overview: SessionValidationOverview | None,
 ) -> str:
+    if int(getattr(row, "successful_package_run_count", 0)) > 0:
+        return "complete"
     if (
         row.SessionRow.status != SessionStatus.CLOSED.value
         or row.SessionRow.active_configuration_version_id is None

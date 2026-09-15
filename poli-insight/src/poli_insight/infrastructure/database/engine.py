@@ -24,6 +24,9 @@ from poli_insight.infrastructure.database.models import (
     participation as participation_models,
 )
 from poli_insight.infrastructure.database.models import ranking as ranking_models
+from poli_insight.infrastructure.database.models import (
+    result_package as result_package_models,
+)
 from poli_insight.infrastructure.database.models import scenario as scenario_models
 from poli_insight.infrastructure.database.models import session as session_models
 from poli_insight.infrastructure.database.models import (
@@ -42,6 +45,7 @@ _REGISTERED_MODEL_MODULES = (
     operations_models,
     participation_models,
     ranking_models,
+    result_package_models,
     scenario_models,
     session_models,
     submission_models,

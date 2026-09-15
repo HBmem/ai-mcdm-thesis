@@ -26,6 +26,25 @@ from poli_insight.infrastructure.database.models.analysis import (
     AnalysisRunRow,
 )
 
+_ANALYSIS_ARTIFACT_ORDER = {
+    ArtifactType.INPUT_MANIFEST.value: 0,
+    ArtifactType.STRUCTURED_RESULT.value: 1,
+    ArtifactType.ANALYSIS_BUNDLE.value: 2,
+}
+
+
+def _artifact_sort_key(row: AnalysisArtifactRow) -> tuple[int, str, str]:
+    """Restore the hash-significant order used when an analysis is created."""
+
+    return (
+        _ANALYSIS_ARTIFACT_ORDER.get(
+            row.artifact_type,
+            len(_ANALYSIS_ARTIFACT_ORDER),
+        ),
+        row.artifact_type,
+        str(row.analysis_artifact_id),
+    )
+
 
 def analysis_run_to_row(run: AnalysisRun) -> AnalysisRunRow:
     return AnalysisRunRow(
@@ -86,13 +105,7 @@ def analysis_run_to_domain(row: AnalysisRunRow) -> AnalysisRun:
         ),
         artifacts=tuple(
             _artifact_to_domain(item)
-            for item in sorted(
-                row.artifacts,
-                key=lambda value: (
-                    value.artifact_type,
-                    str(value.analysis_artifact_id),
-                ),
-            )
+            for item in sorted(row.artifacts, key=_artifact_sort_key)
         ),
     )
 
@@ -122,13 +135,7 @@ def analysis_run_summary_to_domain(row: AnalysisRunRow) -> AnalysisRunSummary:
         correlation_id=row.correlation_id,
         artifacts=tuple(
             _artifact_to_domain(item)
-            for item in sorted(
-                row.artifacts,
-                key=lambda value: (
-                    value.artifact_type,
-                    str(value.analysis_artifact_id),
-                ),
-            )
+            for item in sorted(row.artifacts, key=_artifact_sort_key)
         ),
         output_hash=row.output_hash,
         failure_code=row.failure_code,

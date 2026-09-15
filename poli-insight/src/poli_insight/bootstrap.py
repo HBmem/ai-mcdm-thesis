@@ -13,6 +13,7 @@ from poli_insight.application.use_cases.add_session_configuration import (
 )
 from poli_insight.application.use_cases.close_session import CloseSession
 from poli_insight.application.use_cases.create_ranking import CreateRanking
+from poli_insight.application.use_cases.create_result_package import CreateResultPackage
 from poli_insight.application.use_cases.create_session import CreateSession
 from poli_insight.application.use_cases.create_session_configuration import (
     CreateSessionConfiguration,
@@ -34,6 +35,7 @@ from poli_insight.application.use_cases.import_invitations import (
 from poli_insight.application.use_cases.import_scenario import ImportScenario
 from poli_insight.application.use_cases.list_analysis_runs import ListAnalysisRuns
 from poli_insight.application.use_cases.list_ranking_runs import ListRankingRuns
+from poli_insight.application.use_cases.list_result_packages import ListResultPackages
 from poli_insight.application.use_cases.list_validation_bundles import (
     ListValidationBundles,
 )
@@ -48,6 +50,12 @@ from poli_insight.application.use_cases.participant_access import (
     CaptureParticipantConsent,
     ResumeParticipant,
 )
+from poli_insight.application.use_cases.participant_result_release import (
+    ListParticipantResultReleases,
+    ParticipantResultAccess,
+    ReleaseParticipantResults,
+    WithdrawParticipantResults,
+)
 from poli_insight.application.use_cases.participant_submission_import import (
     ApplyParticipantSubmissionImport,
     GenerateImportedResumeLinks,
@@ -58,6 +66,10 @@ from poli_insight.application.use_cases.participant_submission_import import (
 )
 from poli_insight.application.use_cases.replace_participant_access_grant import (
     ReplaceParticipantAccessGrant,
+)
+from poli_insight.application.use_cases.result_package_exports import (
+    ExportResultPackage,
+    RenderDeterministicReport,
 )
 from poli_insight.application.use_cases.review_submission import ReviewSubmission
 from poli_insight.application.use_cases.run_selected_analyses import RunSelectedAnalyses
@@ -137,6 +149,18 @@ class AnalysisUseCases:
 
 
 @dataclass(frozen=True, slots=True)
+class PackageUseCases:
+    create: CreateResultPackage
+    list_runs: ListResultPackages
+    export: ExportResultPackage
+    render_report: RenderDeterministicReport
+    release_participants: ReleaseParticipantResults
+    withdraw_participants: WithdrawParticipantResults
+    list_releases: ListParticipantResultReleases
+    participant_access: ParticipantResultAccess
+
+
+@dataclass(frozen=True, slots=True)
 class ParticipationUseCases:
     enroll: EnrollParticipant
     resume: ResumeParticipant
@@ -181,6 +205,7 @@ class ApplicationContainer:
     validation: ValidationUseCases
     ranking: RankingUseCases
     analysis: AnalysisUseCases
+    packages: PackageUseCases
     participation: ParticipationUseCases
     operations: OperationalUseCases
     participant_imports: ParticipantImportUseCases
@@ -273,6 +298,16 @@ def create_container(
                 ranking_registry,
             ),
             list_runs=ListAnalysisRuns(unit_of_work_factory),
+        ),
+        packages=PackageUseCases(
+            create=CreateResultPackage(unit_of_work_factory),
+            list_runs=ListResultPackages(unit_of_work_factory),
+            export=ExportResultPackage(unit_of_work_factory),
+            render_report=RenderDeterministicReport(unit_of_work_factory),
+            release_participants=ReleaseParticipantResults(unit_of_work_factory),
+            withdraw_participants=WithdrawParticipantResults(unit_of_work_factory),
+            list_releases=ListParticipantResultReleases(unit_of_work_factory),
+            participant_access=ParticipantResultAccess(unit_of_work_factory),
         ),
         participation=ParticipationUseCases(
             enroll=EnrollParticipant(enrollment_unit_of_work_factory),
