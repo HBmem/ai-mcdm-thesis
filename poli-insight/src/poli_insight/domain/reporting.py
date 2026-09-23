@@ -183,9 +183,3 @@ class SharedReport:
     documents: tuple[DocumentVersion | DocumentSummary, ...]
     draft: bool
     release_id: str | None = None
-
-@dataclass(frozen=True, slots=True)
-class ReportLookups:
-    alternatives: dict[str, str]
-    criteria: dict[str, str]
-    stakeholder_groups: dict[str, str]

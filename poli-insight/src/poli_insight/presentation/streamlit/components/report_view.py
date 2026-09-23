@@ -9,6 +9,7 @@ from poli_insight.application.use_cases.manual_report_exports import (
     report_html,
     report_zip,
 )
+from poli_insight.application.use_cases.deterministic_audit_renderer import deterministic_audit_export_html
 
 _SECTION_DESCRIPTIONS = {
     "01_context": "The frozen policy question, alternatives, criteria, and decision matrix.",
@@ -142,7 +143,7 @@ def render_shared_report(report, *, key, include_exports=True, focused=False):
 
 
 def render_report_downloads(report, *, key):
-    a, b = st.columns(2)
+    a, b, c = st.columns(3, vertical_alignment="center")
     suffix = "-draft" if report.draft else ""
     a.download_button(
         "Export report HTML",
@@ -152,6 +153,13 @@ def render_report_downloads(report, *, key):
         key=f"{key}:html",
     )
     b.download_button(
+        "Export deterministic audit report HTML",
+        deterministic_audit_export_html(report),
+        file_name=f"deterministic-report-{report.revision.number}{suffix}.html",
+        mime="text/html",
+        key=f"deterministic-report-{key}:html",
+    )
+    c.download_button(
         "Export report and evidence",
         report_zip(report),
         file_name=f"report-{report.revision.number}{suffix}.zip",
