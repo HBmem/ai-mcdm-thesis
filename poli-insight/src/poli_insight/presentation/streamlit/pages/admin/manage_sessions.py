@@ -12,9 +12,6 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import streamlit as st
-from streamlit_extras.metric_cards import (  # type: ignore[import-untyped]
-    style_metric_cards,
-)
 from streamlit_extras.pagination import pagination  # type: ignore[import-untyped]
 from streamlit_extras.steps import steps  # type: ignore[import-untyped]
 
@@ -116,8 +113,11 @@ from poli_insight.domain.enum import (
 from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
     format_datetime,
+    metric_row,
     render_empty_state,
     render_page_header,
+    render_section_heading,
+    surface,
 )
 from poli_insight.presentation.streamlit.components.scenario_archive import (
     MAX_ARCHIVE_BYTES,
@@ -157,6 +157,8 @@ class _OneTimeResumeLink:
 
     def __repr__(self) -> str:
         return "_OneTimeResumeLink(resume_url=<redacted>)"
+
+
 _SELECTED_SNAPSHOT_KEY = "scenario_library:selected_snapshot_id"
 _PAGE_KEY = "scenario_library:page"
 _FILTER_KEY = "scenario_library:filter_fingerprint"
@@ -217,11 +219,11 @@ def render(context: PageContext) -> None:
     tabs = st.tabs(("Sessions", "Scenario Library", "Imports", "Audit"))
     with tabs[0]:
         _render_sessions(context)
-    with tabs[1]:
+    with tabs[1], surface(key="manage:scenario-library"):
         _render_scenario_library(context)
-    with tabs[2]:
+    with tabs[2], surface(key="manage:imports"):
         _render_participant_submission_imports(context)
-    with tabs[3]:
+    with tabs[3], surface(key="manage:audit"):
         _render_admin_audit(context)
 
 
@@ -287,17 +289,25 @@ def _render_participant_submission_imports(context: PageContext) -> None:
         st.error(str(error), icon=":material/error:")
         return
 
-    with st.container(border=True):
-        st.markdown(f"#### {scope.session_title}")
+    with surface(key="manage_sessions:_render_participant_submission_imports:1"):
+        render_section_heading(f"{scope.session_title}", level=3)
         st.caption(
             f"/{scope.session_slug} · {scope.lifecycle_state.value.title()} · "
             f"{scope.scenario_title} {scope.scenario_version}"
         )
-        facts = st.columns(4)
-        facts[0].metric("Configuration", f"v{scope.configuration_version}")
-        facts[1].metric("Required questions", scope.required_question_count)
-        facts[2].metric("Response", scope.response_format.value.replace("_", " "))
-        facts[3].metric("Target", scope.response_target_type.replace("_", " "))
+        facts = metric_row(
+            4, key="manage_sessions:_render_participant_submission_imports:0"
+        )
+        facts[0].metric("Configuration", f"v{scope.configuration_version}", border=True)
+        facts[1].metric(
+            "Required questions", scope.required_question_count, border=True
+        )
+        facts[2].metric(
+            "Response", scope.response_format.value.replace("_", " "), border=True
+        )
+        facts[3].metric(
+            "Target", scope.response_target_type.replace("_", " "), border=True
+        )
         st.markdown(
             f"**Scale:** {scope.scale_name} v{scope.scale_version}  \n"
             f"**Groups:** {', '.join(f'{key} ({name})' for key, name in scope.groups)}  \n"
@@ -313,7 +323,7 @@ def _render_participant_submission_imports(context: PageContext) -> None:
         _render_participant_import_result(context, scope, completed_result)
         return
 
-    st.markdown("#### 2. Prepare template")
+    render_section_heading("2. Prepare template", level=3)
     template_columns = st.columns(4)
     template_specs = (
         ("Blank Excel", "xlsx", False),
@@ -345,7 +355,7 @@ def _render_participant_submission_imports(context: PageContext) -> None:
                 key=f"{_PARTICIPANT_IMPORT_PREFIX}template:{file_format}:{example}",
             )
 
-    st.markdown("#### 3. Upload and preview")
+    render_section_heading("3. Upload and preview", level=3)
     upload = st.file_uploader(
         "CSV or Excel workbook",
         type=("csv", "xlsx"),
@@ -366,8 +376,7 @@ def _render_participant_submission_imports(context: PageContext) -> None:
             if row.status
             in {ImportRowStatus.SKIPPED_CONFLICT, ImportRowStatus.PLANNED_REPLACEMENT}
         )
-        if current_preview is not None
-        and current_preview.session_id == selected_id
+        if current_preview is not None and current_preview.session_id == selected_id
         else ()
     )
     selected_replacement_rows = (
@@ -426,12 +435,14 @@ def _render_participant_submission_imports(context: PageContext) -> None:
     if preview.session_id != selected_id:
         return
     summary = preview.summary
-    metrics = st.columns(5)
-    metrics[0].metric("Rows", summary.total_rows)
-    metrics[1].metric("New", summary.new_participants)
-    metrics[2].metric("Submitted", summary.submitted)
-    metrics[3].metric("Skipped", summary.skipped_conflicts)
-    metrics[4].metric("Blocking", summary.blocking_error_count)
+    metrics = metric_row(
+        5, key="manage_sessions:_render_participant_submission_imports:1"
+    )
+    metrics[0].metric("Rows", summary.total_rows, border=True)
+    metrics[1].metric("New", summary.new_participants, border=True)
+    metrics[2].metric("Submitted", summary.submitted, border=True)
+    metrics[3].metric("Skipped", summary.skipped_conflicts, border=True)
+    metrics[4].metric("Blocking", summary.blocking_error_count, border=True)
     status_filter = st.selectbox(
         "Row status",
         options=(None, *ImportRowStatus),
@@ -441,7 +452,8 @@ def _render_participant_submission_imports(context: PageContext) -> None:
         key=f"{_PARTICIPANT_IMPORT_PREFIX}status_filter",
     )
     visible_rows = tuple(
-        row for row in preview.rows
+        row
+        for row in preview.rows
         if status_filter is None or row.status == status_filter
     )
     st.dataframe(
@@ -477,7 +489,7 @@ def _render_participant_submission_imports(context: PageContext) -> None:
             key=f"{_PARTICIPANT_IMPORT_PREFIX}diagnostics",
         )
 
-    st.markdown("#### 4. Confirm and apply")
+    render_section_heading("4. Confirm and apply", level=3)
     if preview.has_blocking_errors:
         st.error("Resolve every blocking error and preview the file again.")
         return
@@ -542,9 +554,19 @@ def _render_participant_submission_imports(context: PageContext) -> None:
         not confirmed
         or not lifecycle_supported
         or actor_id is None
-        or (scope.lifecycle_state in {SessionStatus.PAUSED, SessionStatus.CLOSED} and (not lifecycle_override or not (lifecycle_reason or "").strip()))
-        or (summary.planned_replacements and not scope.allow_resubmissions and (not resub_override or not (resub_reason or "").strip()))
-        or (summary.identity_rows > 0 and (not identity_attested or not (identity_basis or "").strip()))
+        or (
+            scope.lifecycle_state in {SessionStatus.PAUSED, SessionStatus.CLOSED}
+            and (not lifecycle_override or not (lifecycle_reason or "").strip())
+        )
+        or (
+            summary.planned_replacements
+            and not scope.allow_resubmissions
+            and (not resub_override or not (resub_reason or "").strip())
+        )
+        or (
+            summary.identity_rows > 0
+            and (not identity_attested or not (identity_basis or "").strip())
+        )
     )
     if st.button(
         "Confirm and apply",
@@ -587,12 +609,13 @@ def _render_participant_submission_imports(context: PageContext) -> None:
                 st.session_state[_PARTICIPANT_IMPORT_RESULT_KEY] = result
                 st.session_state.pop(_PARTICIPANT_IMPORT_CONTENT_KEY, None)
                 st.session_state.pop(_PARTICIPANT_IMPORT_PREVIEW_KEY, None)
-                st.session_state.pop(
-                    f"{_PARTICIPANT_IMPORT_PREFIX}upload", None
-                )
+                st.session_state.pop(f"{_PARTICIPANT_IMPORT_PREFIX}upload", None)
                 st.rerun()
 
-def _render_participant_import_result(context: PageContext, scope: Any, result: Any) -> None:
+
+def _render_participant_import_result(
+    context: PageContext, scope: Any, result: Any
+) -> None:
     st.success(
         f"Import applied: {result.created_participant_count} participants, "
         f"{result.submitted_count} submissions, {result.replaced_count} replacements."
@@ -626,13 +649,15 @@ def _render_participant_import_result(context: PageContext, scope: Any, result: 
             key=f"{_PARTICIPANT_IMPORT_PREFIX}resume_generate",
         ):
             try:
-                generated_credentials = context.container.participant_imports.generate_resume_links.execute(
-                    GenerateImportedResumeLinksCommand(
-                        session_id=scope.session_id,
-                        participant_ids=eligible_ids,
-                        actor_id=context.principal.subject or "",
-                        actor_roles=context.principal.roles,
-                        confirmed=confirmed,
+                generated_credentials = (
+                    context.container.participant_imports.generate_resume_links.execute(
+                        GenerateImportedResumeLinksCommand(
+                            session_id=scope.session_id,
+                            participant_ids=eligible_ids,
+                            actor_id=context.principal.subject or "",
+                            actor_roles=context.principal.roles,
+                            confirmed=confirmed,
+                        )
                     )
                 )
             except ParticipantSubmissionImportError as error:
@@ -654,15 +679,17 @@ def _render_participant_import_result(context: PageContext, scope: Any, result: 
             alias = item.participant_alias
             if alias.startswith(("=", "+", "-", "@")):
                 alias = "'" + alias
-            writer.writerow((
-                alias,
-                private_resume_url(
-                    context.container.settings.public_base_url,
-                    session_slug=credentials.session_slug,
-                    access_token=item.access_token,
-                ),
-                item.expires_at.isoformat(),
-            ))
+            writer.writerow(
+                (
+                    alias,
+                    private_resume_url(
+                        context.container.settings.public_base_url,
+                        session_slug=credentials.session_slug,
+                        access_token=item.access_token,
+                    ),
+                    item.expires_at.isoformat(),
+                )
+            )
         st.download_button(
             "Download one-time resume links",
             data=output.getvalue().encode("utf-8"),
@@ -727,13 +754,14 @@ def _render_sessions(context: PageContext) -> None:
             _begin_session_creation()
 
     scenario_options = context.queries.list_session_scenarios()
-    session_filters = render_session_search(
-        key="sessions:search_filters",
-        scenarios=scenario_options,
-        domains=context.queries.list_scenario_domains(),
-    )
+    with surface(key="manage:session-filters", variant="filter"):
+        session_filters = render_session_search(
+            key="sessions:search_filters",
+            scenarios=scenario_options,
+            domains=context.queries.list_scenario_domains(),
+        )
 
-    with st.container(border=True):
+    with surface(key="manage_sessions:_render_sessions:1"):
         fingerprint = session_filters
         if st.session_state.get(_SESSION_FILTER_KEY) != fingerprint:
             st.session_state[_SESSION_FILTER_KEY] = fingerprint
@@ -742,14 +770,11 @@ def _render_sessions(context: PageContext) -> None:
         metrics = context.queries.get_session_catalog_metrics(
             filters=session_filters,
         )
-        metric_columns = st.columns(3)
-        metric_columns[0].metric("Sessions", metrics.total_count)
-        metric_columns[1].metric("Open", metrics.open_count)
-        metric_columns[2].metric("Needs attention", metrics.attention_count)
-        style_metric_cards(
-            border_left_color=st.get_option("theme.primaryColor") or "#C4932A",
-            border_radius_px=8,
-            box_shadow=False,
+        metric_columns = metric_row(3, key="manage_sessions:_render_sessions:0")
+        metric_columns[0].metric("Sessions", metrics.total_count, border=True)
+        metric_columns[1].metric("Open", metrics.open_count, border=True)
+        metric_columns[2].metric(
+            "Needs attention", metrics.attention_count, border=True
         )
 
         requested_page = max(1, int(st.session_state.get(_SESSION_PAGE_KEY, 1)))
@@ -897,7 +922,11 @@ def _render_session_detail(
         st.session_state.pop(_SESSION_SELECTED_KEY, None)
         st.rerun()
 
-    with st.container(border=True, height="stretch", vertical_alignment="distribute"):
+    with surface(
+        key="manage_sessions:_render_session_detail:1",
+        height="stretch",
+        vertical_alignment="distribute",
+    ):
         header_columns = st.columns([0.68, 0.32], vertical_alignment="center")
         with header_columns[0]:
             st.caption(
@@ -947,9 +976,7 @@ def _render_session_detail(
             ):
                 st.session_state["processing:session_id"] = summary.session_id
                 st.session_state["processing:workspace_mode"] = (
-                    "work"
-                    if summary.status == SessionStatus.CLOSED
-                    else "processed"
+                    "work" if summary.status == SessionStatus.CLOSED else "processed"
                 )
                 st.switch_page(context.routes["processing"])
 
@@ -1248,7 +1275,7 @@ def _execute_transition(
 def _render_session_overview(detail: AdminSessionDetail) -> None:
     columns = st.columns([0.68, 0.32])
     with columns[0]:
-        st.markdown("#### Session readiness")
+        render_section_heading("Session readiness", level=3)
         readiness = (
             (
                 detail.summary.scenario_status == ScenarioSnapshotStatus.READY,
@@ -1272,7 +1299,7 @@ def _render_session_overview(detail: AdminSessionDetail) -> None:
                 f"{label}"
             )
 
-        st.markdown("#### Participation progress")
+        render_section_heading("Participation progress", level=3)
         if detail.group_progress:
             st.dataframe(
                 [
@@ -1297,7 +1324,7 @@ def _render_session_overview(detail: AdminSessionDetail) -> None:
                 icon=":material/groups:",
             )
     with columns[1]:
-        st.markdown("#### Needs attention")
+        render_section_heading("Needs attention", level=3)
         attention = {
             "Participants not submitted": max(
                 detail.summary.participant_count
@@ -1306,9 +1333,9 @@ def _render_session_overview(detail: AdminSessionDetail) -> None:
             ),
         }
         for label, value in attention.items():
-            st.metric(label, value)
+            st.metric(label, value, border=True)
         if detail.admin_notes:
-            st.markdown("#### Administrator notes")
+            render_section_heading("Administrator notes", level=3)
             st.write(detail.admin_notes)
 
 
@@ -1323,7 +1350,7 @@ def _render_session_configuration(
     }
     heading_columns = st.columns([0.7, 0.3], vertical_alignment="center")
     with heading_columns[0]:
-        st.markdown("#### Immutable configuration versions")
+        render_section_heading("Immutable configuration versions", level=3)
         st.caption("Create a complete version, review it, then activate it explicitly.")
     with heading_columns[1]:
         if st.button(
@@ -1347,8 +1374,8 @@ def _render_session_configuration(
             icon=":material/tune:",
         )
     else:
-        st.markdown(
-            f"##### Active configuration · version {configuration.version_number}"
+        render_section_heading(
+            f"Active configuration · version {configuration.version_number}", level=4
         )
         st.caption(
             "Activated "
@@ -1394,7 +1421,7 @@ def _render_session_configuration(
             st.code(configuration.configuration_version_id, language=None)
             st.code(configuration.config_hash, language=None)
 
-    st.markdown("##### Version history")
+    render_section_heading("Version history", level=4)
     if not detail.configurations:
         st.caption("No configuration versions have been created.")
         return
@@ -1548,7 +1575,7 @@ def _render_configuration_response_step(
     prefix: str,
     step_key: str,
 ) -> None:
-    st.markdown("#### Response and calculation contract")
+    render_section_heading("Response and calculation contract", level=3)
     st.write(
         "Choose how participants answer and pin versioned algorithm "
         "implementations for weighting and ranking."
@@ -1760,7 +1787,7 @@ def _render_configuration_groups_step(
     prefix: str,
     step_key: str,
 ) -> None:
-    st.markdown("#### Stakeholder allocations")
+    render_section_heading("Stakeholder allocations", level=3)
     st.write(
         "Define the groups used for aggregation. Active allocations must total "
         "exactly 100.00%."
@@ -1889,7 +1916,7 @@ def _normalize_group_rows(rows: Any) -> list[dict[str, object]]:
 
 
 def _render_configuration_rules_step(prefix: str, step_key: str) -> None:
-    st.markdown("#### Submission and validation rules")
+    render_section_heading("Submission and validation rules", level=3)
     saved = st.session_state.get(f"{prefix}:rules_draft")
     if not isinstance(saved, _ConfigurationRulesDraft):
         saved = None
@@ -1941,7 +1968,7 @@ def _render_configuration_rules_step(prefix: str, step_key: str) -> None:
             help="Used by consistency-aware weighting methods; 0 to 1.",
             key=f"{prefix}:consistency_threshold",
         )
-        st.markdown("##### Participant consent")
+        render_section_heading("Participant consent", level=4)
         consent_required = st.checkbox(
             "Require consent before questionnaire participation",
             value=(True if saved is None else saved.consent_required),
@@ -2016,7 +2043,7 @@ def _render_configuration_review_step(
     prefix: str,
     step_key: str,
 ) -> None:
-    st.markdown("#### Review immutable version")
+    render_section_heading("Review immutable version", level=3)
     response_draft = st.session_state.get(f"{prefix}:response_draft")
     groups = st.session_state.get(f"{prefix}:groups")
     rules_draft = st.session_state.get(f"{prefix}:rules_draft")
@@ -2240,7 +2267,7 @@ def _render_session_invitations(
         IssuedInvitationResult,
     ):
         _render_issued_invitation_dialog(context, detail)
-    st.markdown("#### Invitation management")
+    render_section_heading("Invitation management", level=3)
     st.caption(
         "Credentials are shown only when issued. Resending securely replaces the "
         "old unused token instead of storing recoverable secrets."
@@ -2487,9 +2514,9 @@ def _render_invitation_actions(
     invitation: Any,
     actor_id: str | None,
 ) -> None:
-    with st.container(border=True):
-        st.markdown(
-            f"##### Invitation {invitation.token_hint or invitation.invitation_id}"
+    with surface(key=f"manage:invitation:{invitation.invitation_id}"):
+        render_section_heading(
+            f"Invitation {invitation.token_hint or invitation.invitation_id}", level=4
         )
         st.write(
             f"Status: **{invitation.status.value.replace('_', ' ').title()}** · "
@@ -2587,11 +2614,11 @@ def _render_invitation_import(
     preview = st.session_state.get(_INVITATION_IMPORT_PREVIEW_KEY)
     if not isinstance(preview, InvitationImportPreview):
         return
-    metrics = st.columns(4)
-    metrics[0].metric("Rows", len(preview.rows))
-    metrics[1].metric("Inserts", preview.expected_inserts)
-    metrics[2].metric("Duplicates", preview.duplicate_count)
-    metrics[3].metric("Invalid", preview.invalid_count)
+    metrics = metric_row(4, key="manage_sessions:_render_invitation_import:0")
+    metrics[0].metric("Rows", len(preview.rows), border=True)
+    metrics[1].metric("Inserts", preview.expected_inserts, border=True)
+    metrics[2].metric("Duplicates", preview.duplicate_count, border=True)
+    metrics[3].metric("Invalid", preview.invalid_count, border=True)
     st.dataframe(
         [
             {
@@ -2661,7 +2688,7 @@ def _render_session_participants(
     context: PageContext,
     detail: AdminSessionDetail,
 ) -> None:
-    st.markdown("#### Participants")
+    render_section_heading("Participants", level=3)
     st.caption("Analytical labels are shown without decrypted identity data.")
     try:
         participant_metrics = context.queries.get_session_participant_metrics(
@@ -2670,13 +2697,18 @@ def _render_session_participants(
     except PageQueryError as error:
         st.error(str(error), icon=":material/error:")
         return
-    metric_columns = st.columns(4)
-    metric_columns[0].metric("Enrolled", participant_metrics.total_enrolled)
-    metric_columns[1].metric("Never started", participant_metrics.never_started)
-    metric_columns[2].metric("Active drafts", participant_metrics.active_drafts)
+    metric_columns = metric_row(4, key="manage_sessions:_render_session_participants:0")
+    metric_columns[0].metric(
+        "Enrolled", participant_metrics.total_enrolled, border=True
+    )
+    metric_columns[1].metric(
+        "Never started", participant_metrics.never_started, border=True
+    )
+    metric_columns[2].metric(
+        "Active drafts", participant_metrics.active_drafts, border=True
+    )
     metric_columns[3].metric(
-        "Completion rate",
-        f"{participant_metrics.completion_rate:.0f}%",
+        "Completion rate", f"{participant_metrics.completion_rate:.0f}%", border=True
     )
     if participant_metrics.stale_drafts:
         st.warning(
@@ -2786,20 +2818,42 @@ def _render_participant_detail(
     session: AdminSessionDetail,
     participant: Any,
 ) -> None:
-    with st.container(border=True):
-        st.markdown(f"##### {participant.summary.display_label}")
+    with surface(key=f"manage:participant:{participant.summary.participant_id}"):
+        render_section_heading(f"{participant.summary.display_label}", level=4)
         tabs = st.tabs(
-            ("Overview", "Timeline", "Draft progress", "Attempts", "Resume access", "Consent")
+            (
+                "Overview",
+                "Timeline",
+                "Draft progress",
+                "Attempts",
+                "Resume access",
+                "Consent",
+            )
         )
         with tabs[0]:
             st.dataframe(
                 [
-                    {"Field": "Participant", "Value": participant.summary.display_label},
-                    {"Field": "Participant ID", "Value": participant.summary.participant_id},
+                    {
+                        "Field": "Participant",
+                        "Value": participant.summary.display_label,
+                    },
+                    {
+                        "Field": "Participant ID",
+                        "Value": participant.summary.participant_id,
+                    },
                     {"Field": "Group", "Value": participant.summary.group_name},
-                    {"Field": "Configuration version", "Value": participant.configuration_version},
-                    {"Field": "Enrollment source", "Value": participant.invitation_id or "Direct enrollment"},
-                    {"Field": "Overall progress", "Value": participant.summary.progress},
+                    {
+                        "Field": "Configuration version",
+                        "Value": participant.configuration_version,
+                    },
+                    {
+                        "Field": "Enrollment source",
+                        "Value": participant.invitation_id or "Direct enrollment",
+                    },
+                    {
+                        "Field": "Overall progress",
+                        "Value": participant.summary.progress,
+                    },
                 ],
                 hide_index=True,
                 width="stretch",
@@ -2809,7 +2863,12 @@ def _render_participant_detail(
                 ("Enrolled", participant.summary.enrolled_at),
                 ("Joined", participant.joined_at),
                 ("Started", participant.started_at),
-                ("Last draft save", None if participant.draft is None else participant.draft.last_saved_at),
+                (
+                    "Last draft save",
+                    None
+                    if participant.draft is None
+                    else participant.draft.last_saved_at,
+                ),
                 ("Submitted", participant.submitted_at),
                 ("Completed", participant.completed_at),
                 ("Last updated", participant.updated_at),
@@ -2818,11 +2877,17 @@ def _render_participant_detail(
                 [{"Milestone": label, "Time": value} for label, value in timeline],
                 hide_index=True,
                 width="stretch",
-                column_config={"Time": st.column_config.DatetimeColumn(format="MMM D, YYYY, h:mm a")},
+                column_config={
+                    "Time": st.column_config.DatetimeColumn(
+                        format="MMM D, YYYY, h:mm a"
+                    )
+                },
             )
         with tabs[2]:
             if participant.draft is None:
-                st.info("Enrolled but never saved: no draft exists for this participant.")
+                st.info(
+                    "Enrolled but never saved: no draft exists for this participant."
+                )
             else:
                 draft = participant.draft
                 st.progress(
@@ -2833,11 +2898,13 @@ def _render_participant_detail(
                     ),
                 )
                 st.dataframe(
-                    [{
-                        "Draft ID": draft.submission_id,
-                        "Attempt": draft.attempt_number,
-                        "Last saved": draft.last_saved_at,
-                    }],
+                    [
+                        {
+                            "Draft ID": draft.submission_id,
+                            "Attempt": draft.attempt_number,
+                            "Last saved": draft.last_saved_at,
+                        }
+                    ],
                     hide_index=True,
                     width="stretch",
                 )
@@ -2846,12 +2913,15 @@ def _render_participant_detail(
                 st.info("No submission attempts exist.")
             else:
                 st.dataframe(
-                    [{
-                        "Attempt": item.attempt_number,
-                        "Status": item.status.value.replace("_", " ").title(),
-                        "Submitted": item.submitted_at,
-                        "Predecessor": item.previous_submission_id or "—",
-                    } for item in participant.attempts],
+                    [
+                        {
+                            "Attempt": item.attempt_number,
+                            "Status": item.status.value.replace("_", " ").title(),
+                            "Submitted": item.submitted_at,
+                            "Predecessor": item.previous_submission_id or "—",
+                        }
+                        for item in participant.attempts
+                    ],
                     hide_index=True,
                     width="stretch",
                 )
@@ -2861,11 +2931,15 @@ def _render_participant_detail(
                 isinstance(one_time, _OneTimeResumeLink)
                 and one_time.participant_id == participant.summary.participant_id
             ):
-                st.success("New private resume link generated. This is the only display.")
+                st.success(
+                    "New private resume link generated. This is the only display."
+                )
                 st.code(one_time.resume_url, language=None, wrap_lines=True)
                 st.download_button(
                     "Download new link",
-                    data=(f"{one_time.resume_url}\nExpires: {one_time.expires_at.isoformat()}\n"),
+                    data=(
+                        f"{one_time.resume_url}\nExpires: {one_time.expires_at.isoformat()}\n"
+                    ),
                     file_name="poli-insight-replacement-resume-link.txt",
                     mime="text/plain",
                     key=f"participant_access:download:{participant.summary.participant_id}",
@@ -2886,14 +2960,20 @@ def _render_participant_detail(
                 elif remaining <= timedelta(days=3):
                     st.warning("Resume access expires soon.")
                 st.dataframe(
-                    [{
-                        "Status": access.status.replace("_", " ").title(),
-                        "Issued": access.issued_at,
-                        "Expires": access.expires_at,
-                        "Last used": access.last_used_at,
-                        "Time remaining": str(max(remaining, timedelta(0))).split(".")[0],
-                        "Replacement exists": "Yes" if access.has_replacement else "No",
-                    }],
+                    [
+                        {
+                            "Status": access.status.replace("_", " ").title(),
+                            "Issued": access.issued_at,
+                            "Expires": access.expires_at,
+                            "Last used": access.last_used_at,
+                            "Time remaining": str(max(remaining, timedelta(0))).split(
+                                "."
+                            )[0],
+                            "Replacement exists": "Yes"
+                            if access.has_replacement
+                            else "No",
+                        }
+                    ],
                     hide_index=True,
                     width="stretch",
                 )
@@ -2914,12 +2994,14 @@ def _render_participant_detail(
             if consent.required and not consent.completed:
                 st.warning("Required consent has not been completed.")
             st.dataframe(
-                [{
-                    "Required": "Yes" if consent.required else "No",
-                    "Complete": "Yes" if consent.completed else "No",
-                    "Version": consent.consent_version,
-                    "Accepted": consent.accepted_at,
-                }],
+                [
+                    {
+                        "Required": "Yes" if consent.required else "No",
+                        "Complete": "Yes" if consent.completed else "No",
+                        "Version": consent.consent_version,
+                        "Accepted": consent.accepted_at,
+                    }
+                ],
                 hide_index=True,
                 width="stretch",
             )
@@ -2987,7 +3069,7 @@ def _render_session_submissions(
     context: PageContext,
     detail: AdminSessionDetail,
 ) -> None:
-    st.markdown("#### Submissions")
+    render_section_heading("Submissions", level=3)
     st.caption("Finalized answers remain immutable; corrections are separate attempts.")
     filters = st.columns([0.65, 0.2, 0.15])
     search = filters[0].text_input(
@@ -3029,9 +3111,7 @@ def _render_session_submissions(
     _normalize_operational_page(prefix, result)
     if not result.items:
         render_empty_state(
-            "No matching submissions"
-            if any((search, status))
-            else "No submissions",
+            "No matching submissions" if any((search, status)) else "No submissions",
             "No response attempts match the current filters.",
             icon=":material/inbox:",
         )
@@ -3071,9 +3151,10 @@ def _render_session_submissions(
 
 
 def _render_submission_detail(context: PageContext, submission: Any) -> None:
-    with st.container(border=True):
-        st.markdown(
-            f"##### {submission.summary.participant_label} · attempt {submission.summary.attempt_number}"
+    with surface(key=f"manage:submission:{submission.summary.submission_id}"):
+        render_section_heading(
+            f"{submission.summary.participant_label} · attempt {submission.summary.attempt_number}",
+            level=4,
         )
         tabs = st.tabs(("Overview", "Responses", "Integrity / audit"))
         completion = (
@@ -3086,19 +3167,27 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
         )
         response_rows = _submission_response_rows(submission)
         with tabs[0]:
-            metrics = st.columns(3)
-            metrics[0].metric("Progress", f"{completion:.0f}%")
-            metrics[1].metric("Answers", f"{submission.answer_count} / {submission.required_answer_count}")
-            metrics[2].metric("Attempt", submission.summary.attempt_number)
+            metrics = metric_row(3, key="manage_sessions:_render_submission_detail:0")
+            metrics[0].metric("Progress", f"{completion:.0f}%", border=True)
+            metrics[1].metric(
+                "Answers",
+                f"{submission.answer_count} / {submission.required_answer_count}",
+                border=True,
+            )
+            metrics[2].metric("Attempt", submission.summary.attempt_number, border=True)
             st.dataframe(
-                [{
-                    "Participant": submission.summary.participant_label,
-                    "Group": submission.summary.group_name,
-                    "Status": submission.summary.status.value.replace("_", " ").title(),
-                    "Started": submission.started_at,
-                    "Last saved": submission.last_saved_at,
-                    "Submitted": submission.submitted_at,
-                }],
+                [
+                    {
+                        "Participant": submission.summary.participant_label,
+                        "Group": submission.summary.group_name,
+                        "Status": submission.summary.status.value.replace(
+                            "_", " "
+                        ).title(),
+                        "Started": submission.started_at,
+                        "Last saved": submission.last_saved_at,
+                        "Submitted": submission.submitted_at,
+                    }
+                ],
                 hide_index=True,
                 width="stretch",
             )
@@ -3131,14 +3220,17 @@ def _render_submission_detail(context: PageContext, submission: Any) -> None:
                 )
         with tabs[2]:
             st.dataframe(
-                [{
-                    "Submission ID": submission.summary.submission_id,
-                    "Answer hash": submission.answers_hash or "Draft — not finalized",
-                    "Schema version": submission.answer_schema_version or "Draft",
-                    "Previous submission": submission.previous_submission_id or "—",
-                    "Superseded at": submission.superseded_at,
-                    "Withdrawn at": submission.withdrawn_at,
-                }],
+                [
+                    {
+                        "Submission ID": submission.summary.submission_id,
+                        "Answer hash": submission.answers_hash
+                        or "Draft — not finalized",
+                        "Schema version": submission.answer_schema_version or "Draft",
+                        "Previous submission": submission.previous_submission_id or "—",
+                        "Superseded at": submission.superseded_at,
+                        "Withdrawn at": submission.withdrawn_at,
+                    }
+                ],
                 hide_index=True,
                 width="stretch",
             )
@@ -3303,7 +3395,7 @@ def _invitation_credentials_csv(
 
 
 def _render_session_audit(detail: AdminSessionDetail) -> None:
-    st.markdown("#### Session audit")
+    render_section_heading("Session audit", level=3)
     if not detail.audit_events:
         render_empty_state(
             "No audit events",
@@ -3461,7 +3553,7 @@ def _render_create_session_dialog(context: PageContext) -> None:
     draft = _creation_draft(prefix)
 
     if current_step == 0:
-        st.markdown("#### Choose a ready scenario snapshot")
+        render_section_heading("Choose a ready scenario snapshot", level=3)
         st.write(
             "Alternatives, criteria, scales, and source data are pinned to the "
             "new session and cannot be edited in place."
@@ -3510,7 +3602,7 @@ def _render_create_session_dialog(context: PageContext) -> None:
         return
 
     if current_step == 1:
-        st.markdown("#### Session details")
+        render_section_heading("Session details", level=3)
         st.caption(
             "Changes in this step are submitted together, avoiding a modal "
             "refresh after each text field."
@@ -3570,7 +3662,7 @@ def _render_create_session_dialog(context: PageContext) -> None:
         return
 
     if current_step == 2:
-        st.markdown("#### Access and schedule")
+        render_section_heading("Access and schedule", level=3)
         access_columns = st.columns(2)
         with access_columns[0]:
             discoverability_options = (
@@ -3714,19 +3806,23 @@ def _render_creation_scenario_preview(
     detail: ScenarioSnapshotDetail,
 ) -> None:
     summary = detail.summary
-    with st.container(border=True):
-        st.markdown(f"#### {summary.title}")
+    with surface(key="manage_sessions:_render_creation_scenario_preview:1"):
+        render_section_heading(f"{summary.title}", level=3)
         st.caption(
             f"{summary.scenario_key} · version {summary.declared_version} · "
             f"{summary.domain}"
         )
         st.write(summary.summary)
         st.info(detail.policy_question, icon=":material/help:")
-        preview_columns = st.columns(4)
-        preview_columns[0].metric("Alternatives", summary.alternative_count)
-        preview_columns[1].metric("Criteria", summary.criterion_count)
-        preview_columns[2].metric("Scales", summary.scale_count)
-        preview_columns[3].metric("Files", summary.file_count)
+        preview_columns = metric_row(
+            4, key="manage_sessions:_render_creation_scenario_preview:0"
+        )
+        preview_columns[0].metric(
+            "Alternatives", summary.alternative_count, border=True
+        )
+        preview_columns[1].metric("Criteria", summary.criterion_count, border=True)
+        preview_columns[2].metric("Scales", summary.scale_count, border=True)
+        preview_columns[3].metric("Files", summary.file_count, border=True)
 
         with st.expander("Inspect scenario contents"):
             alternatives, criteria, scales = st.tabs(
@@ -3783,7 +3879,7 @@ def _render_create_session_review(
     step_key: str,
     current_step: int,
 ) -> None:
-    st.markdown("#### Review draft session")
+    render_section_heading("Review draft session", level=3)
     draft = _creation_draft(prefix)
     selected = _selected_wizard_scenario(prefix, scenario_by_id)
     title = str(draft.get("title", "")).strip()
@@ -4175,18 +4271,13 @@ def _render_scenario_library(context: PageContext) -> None:
         _render_bundled_scan_dialog(context)
 
     metrics = context.queries.get_scenario_library_metrics()
-    metric_columns = st.columns(4)
-    metric_columns[0].metric("Definitions", metrics.definition_count)
-    metric_columns[1].metric("Snapshots", metrics.snapshot_count)
-    metric_columns[2].metric("Ready", metrics.ready_count)
-    metric_columns[3].metric("Needs attention", metrics.attention_count)
-    style_metric_cards(
-        border_left_color=st.get_option("theme.primaryColor") or "#C4932A",
-        border_radius_px=8,
-        box_shadow=False,
-    )
+    metric_columns = metric_row(4, key="manage_sessions:_render_scenario_library:0")
+    metric_columns[0].metric("Definitions", metrics.definition_count, border=True)
+    metric_columns[1].metric("Snapshots", metrics.snapshot_count, border=True)
+    metric_columns[2].metric("Ready", metrics.ready_count, border=True)
+    metric_columns[3].metric("Needs attention", metrics.attention_count, border=True)
 
-    st.markdown("#### Catalog")
+    render_section_heading("Catalog", level=3)
     filter_columns = st.columns([0.5, 0.25, 0.25])
     with filter_columns[0]:
         search = st.text_input(
@@ -4331,7 +4422,7 @@ def _render_snapshot_detail(
         summary.created_at,
         timezone_name=context.container.settings.app_timezone,
     )
-    with st.container(border=True):
+    with surface(key="manage_sessions:_render_snapshot_detail:1"):
         heading_columns = st.columns([0.8, 0.2], vertical_alignment="center")
         with heading_columns[0]:
             st.subheader(
@@ -4348,11 +4439,15 @@ def _render_snapshot_detail(
         st.write(summary.summary)
         st.markdown(f"**Policy question:** {detail.policy_question}")
 
-        content_columns = st.columns(4)
-        content_columns[0].metric("Alternatives", summary.alternative_count)
-        content_columns[1].metric("Criteria", summary.criterion_count)
-        content_columns[2].metric("Scales", summary.scale_count)
-        content_columns[3].metric("Matrix values", detail.matrix_value_count)
+        content_columns = metric_row(4, key="manage_sessions:_render_snapshot_detail:0")
+        content_columns[0].metric(
+            "Alternatives", summary.alternative_count, border=True
+        )
+        content_columns[1].metric("Criteria", summary.criterion_count, border=True)
+        content_columns[2].metric("Scales", summary.scale_count, border=True)
+        content_columns[3].metric(
+            "Matrix values", detail.matrix_value_count, border=True
+        )
 
         overview, alternatives, criteria, scales, provenance = st.tabs(
             ("Overview", "Alternatives", "Criteria", "Scales", "Provenance")
@@ -4476,7 +4571,7 @@ def _render_template_popover(context: PageContext) -> None:
         icon=":material/download:",
         width="stretch",
     ):
-        st.markdown("#### Scenario authoring template")
+        render_section_heading("Scenario authoring template", level=3)
         st.write(
             "The template uses JSONC so explanatory comments can be included "
             "while authoring."
@@ -4565,7 +4660,7 @@ def _render_bundled_scan_dialog(context: PageContext) -> None:
         st.session_state[_BATCH_DISCOVERY_KEY] = discovery
 
     with wizard[0]:
-        st.markdown("#### Discovered packages")
+        render_section_heading("Discovered packages", level=3)
         if discovery.error_message is not None:
             st.error(discovery.error_message, icon=":material/error:")
             st.caption(f"Batch reference: `{discovery.correlation_id}`")
@@ -4576,12 +4671,17 @@ def _render_bundled_scan_dialog(context: PageContext) -> None:
                 icon=":material/folder_off:",
             )
         else:
-            discovery_metrics = st.columns(3)
-            discovery_metrics[0].metric("Discovered", len(discovery.candidates))
-            discovery_metrics[1].metric("Ready", discovery.ready_count)
+            discovery_metrics = metric_row(
+                3, key="manage_sessions:_render_bundled_scan_dialog:0"
+            )
+            discovery_metrics[0].metric(
+                "Discovered", len(discovery.candidates), border=True
+            )
+            discovery_metrics[1].metric("Ready", discovery.ready_count, border=True)
             discovery_metrics[2].metric(
                 "Invalid",
                 len(discovery.candidates) - discovery.ready_count,
+                border=True,
             )
             st.dataframe(
                 [
@@ -4615,7 +4715,7 @@ def _render_bundled_scan_dialog(context: PageContext) -> None:
                 wizard.next()
 
     with wizard[1]:
-        st.markdown("#### Import bundled scenarios")
+        render_section_heading("Import bundled scenarios", level=3)
         st.write(
             "Each package is processed in its own transaction. A failed package "
             "will not roll back successful imports."
@@ -4714,11 +4814,11 @@ def _render_batch_result(result: ImportBundledScenariosResult) -> None:
             icon=":material/content_copy:",
         )
 
-    summary_columns = st.columns(4)
-    summary_columns[0].metric("Discovered", result.discovered_count)
-    summary_columns[1].metric("Imported", result.imported_count)
-    summary_columns[2].metric("Skipped", result.skipped_duplicate_count)
-    summary_columns[3].metric("Failed", result.failed_count)
+    summary_columns = metric_row(4, key="manage_sessions:_render_batch_result:0")
+    summary_columns[0].metric("Discovered", result.discovered_count, border=True)
+    summary_columns[1].metric("Imported", result.imported_count, border=True)
+    summary_columns[2].metric("Skipped", result.skipped_duplicate_count, border=True)
+    summary_columns[3].metric("Failed", result.failed_count, border=True)
     if result.outcomes:
         st.dataframe(
             [
@@ -4816,15 +4916,18 @@ def _render_import_dialog(context: PageContext) -> None:
                 icon=":material/warning:",
             )
         else:
-            st.markdown("#### Review package")
-            review_columns = st.columns(3)
-            review_columns[0].metric("Files", inspection.file_count)
+            render_section_heading("Review package", level=3)
+            review_columns = metric_row(
+                3, key="manage_sessions:_render_import_dialog:0"
+            )
+            review_columns[0].metric("Files", inspection.file_count, border=True)
             review_columns[1].metric(
-                "Compressed", _format_bytes(len(inspection.archive_bytes))
+                "Compressed", _format_bytes(len(inspection.archive_bytes)), border=True
             )
             review_columns[2].metric(
                 "Extracted",
                 _format_bytes(inspection.total_uncompressed_bytes),
+                border=True,
             )
             st.markdown(f"**Archive:** `{inspection.filename}`")
             st.markdown(f"**Package root:** `{inspection.package_label}`")

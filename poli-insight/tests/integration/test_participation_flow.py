@@ -111,6 +111,7 @@ def _open_questionnaire(
     slug: str,
     response_format: ResponseFormat,
     consent_required: bool,
+    scale_count: int | None = None,
     access_code: str | None = None,
     enrollment_mode: EnrollmentMode = EnrollmentMode.OPEN,
     stakeholder_selection_mode: StakeholderSelectionMode = (
@@ -129,7 +130,10 @@ def _open_questionnaire(
         "pairwise" if response_format == ResponseFormat.PAIRWISE else "direct_rating"
     )
     scale = next(
-        item for item in scenario.scales if expected_scale_type in item.scale_type
+        item
+        for item in scenario.scales
+        if expected_scale_type in item.scale_type
+        and (scale_count is None or item.value_count == scale_count)
     )
     weighting = container.page_queries.list_active_algorithm_implementations(
         role=AlgorithmRole.WEIGHTING
@@ -209,6 +213,55 @@ def _answer(question_id: str, scale_value_id: str) -> DraftAnswerInput:
         question_definition_id=question_id,
         raw_value_json={"selected_scale_value_id": scale_value_id},
     )
+
+
+@pytest.mark.parametrize("scale_count", [5, 7])
+def test_pairwise_descriptions_are_loaded_from_each_criterion(
+    tmp_path: Path,
+    scale_count: int,
+) -> None:
+    from poli_insight.infrastructure.database.models.scenario import (
+        ScenarioCriterionRow,
+    )
+    from poli_insight.infrastructure.database.models.session import (
+        ResponseQuestionDefinitionRow,
+    )
+
+    container = _container(tmp_path / "criterion-context.sqlite")
+    session_id, group_id = _open_questionnaire(
+        container,
+        slug="criterion-context",
+        response_format=ResponseFormat.PAIRWISE,
+        consent_required=False,
+        scale_count=scale_count,
+    )
+    enrollment = container.participation.enroll.execute(
+        EnrollParticipantCommand(session_id=session_id, selected_group_id=group_id)
+    )
+    workspace = container.page_queries.get_participation_workspace(
+        enrollment.participant_id
+    )
+    assert workspace is not None
+    question_id = workspace.questions[0].question_definition_id
+    description = (
+        "Services <nearby> & accessible.\n" + "Additional criterion context. " * 30
+    )
+    with build_session_factory(container.settings)() as database_session:
+        question = database_session.get(ResponseQuestionDefinitionRow, question_id)
+        left = database_session.get(ScenarioCriterionRow, question.left_criterion_id)
+        right = database_session.get(ScenarioCriterionRow, question.right_criterion_id)
+        left.description = description
+        right.description = None
+        database_session.commit()
+    refreshed = container.page_queries.get_participation_workspace(
+        enrollment.participant_id
+    )
+    assert refreshed is not None
+    assert len(refreshed.scale_options) == scale_count
+    assert refreshed.questions[0].left_description == description
+    assert refreshed.questions[0].right_description is None
+    assert refreshed.questions[0].left_name == workspace.questions[0].left_name
+    assert refreshed.questions[0].right_name == workspace.questions[0].right_name
 
 
 def test_admin_replacement_invalidates_old_link_and_preserves_work(
@@ -309,7 +362,9 @@ def test_admin_replacement_invalidates_old_link_and_preserves_work(
     assert grants[0][2] is not None
     assert grants[0][3] == replaced.access_grant_id
     assert grants[1][1] == digest_token(replaced.access_token)
-    assert all(enrollment.access_token not in str(value) for row in grants for value in row)
+    assert all(
+        enrollment.access_token not in str(value) for row in grants for value in row
+    )
     assert event is not None
     assert replaced.access_token not in "".join(str(value) for value in event)
     assert digest_token(replaced.access_token) not in "".join(

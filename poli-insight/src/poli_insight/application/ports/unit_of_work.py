@@ -25,6 +25,7 @@ from poli_insight.application.ports.participation_access import (
 )
 from poli_insight.application.ports.processing_repository import ProcessingRunRepository
 from poli_insight.application.ports.ranking_repository import RankingRunRepository
+from poli_insight.application.ports.reporting_repository import ReportingRepository
 from poli_insight.application.ports.result_package_repository import (
     ParticipantResultReleaseRepository,
     ResultPackageRepository,
@@ -40,6 +41,7 @@ from poli_insight.application.ports.validation_repository import (
 
 
 class UnitOfWork(Protocol):
+    reporting: ReportingRepository
     analysis_runs: AnalysisRunRepository
     algorithms: AlgorithmRepository
     audit_events: AuditEventRepository

@@ -31,6 +31,9 @@ from poli_insight.presentation.streamlit.components.layout import (
     AdminSurfaceVariant,
     admin_surface,
     format_datetime,
+    metric_row,
+    render_section_heading,
+    surface,
 )
 from poli_insight.presentation.streamlit.context import PageContext
 
@@ -43,7 +46,7 @@ def render_analysis_stage(
     *,
     read_only: bool,
 ) -> None:
-    st.markdown("### Sensitivity and Robustness")
+    render_section_heading("Sensitivity and Robustness", level=2)
     st.caption(
         "Run selected counterfactual tests against one immutable ranking. "
         "Each test is stored as a separate, reproducible analysis run. "
@@ -60,147 +63,150 @@ def render_analysis_stage(
     timezone_name = getattr(
         getattr(context.container, "settings", None), "app_timezone", "UTC"
     )
-    selected_id = st.selectbox(
-        "Source ranking run",
-        options=tuple(run.ranking_run_id for run in successful),
-        format_func=lambda value: _source_label(
-            next(run for run in successful if run.ranking_run_id == value),
-            latest_id,
-            timezone_name,
-        ),
-        key=f"processing:analysis_source:{detail.summary.session_id}",
-    )
-    ranking = next(run for run in successful if run.ranking_run_id == selected_id)
-    source = next(
-        (
-            run
-            for run in weighting_runs
-            if run.processing_run_id == ranking.source_processing_run_id
-        ),
-        None,
-    )
-    if source is None:
-        st.error("The source weighting evidence for this ranking is unavailable.")
-        return
-
-    st.markdown("#### Select tests")
-    columns = st.columns(2)
-    methods = []
-    for position, method in enumerate(AnalysisMethod):
-        if columns[position % 2].checkbox(
-            method_label(method),
-            value=False,
-            key=f"processing:analysis_test:{detail.summary.session_id}:{method.value}",
-        ):
-            methods.append(method)
-    perturbation = _perturbation_configuration(
-        detail.summary.session_id,
-        AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION in methods,
-    )
-    aggregate_matrices = tuple(
-        matrix
-        for matrix in source.matrices
-        if matrix.level in {"stakeholder_group", "session"}
-    )
-    session_matrix = next(
-        (matrix for matrix in source.matrices if matrix.level == "session"), None
-    )
-    criteria = len(session_matrix.criterion_ids) if session_matrix else 0
-    session_result = next(
-        (result for result in ranking.results if result.level == "session"), None
-    )
-    alternatives = len(session_result.alternatives) if session_result else 0
-    groups = sum(matrix.level == "stakeholder_group" for matrix in aggregate_matrices)
-    participants = sum(
-        item.inclusion_status.value == "included" for item in source.submissions
-    )
-    estimates = workload_estimates(
-        methods,
-        scopes=len(aggregate_matrices),
-        criteria=criteria,
-        alternatives=alternatives,
-        groups=groups,
-        participants=participants,
-        perturbation_parameters=perturbation,
-    )
-    case_count = sum(item[1] for item in estimates)
-    evaluation_count = sum(item[2] for item in estimates)
-    with st.expander("Eligibility and estimated workload", expanded=bool(methods)):
-        metrics = st.columns(5)
-        for target, label, value in zip(
-            metrics,
-            (
-                "Criteria",
-                "Alternatives",
-                "Groups",
-                "Participants",
-                "Ranking evaluations",
+    with surface(key="analysis:configuration", variant="filter"):
+        selected_id = st.selectbox(
+            "Source ranking run",
+            options=tuple(run.ranking_run_id for run in successful),
+            format_func=lambda value: _source_label(
+                next(run for run in successful if run.ranking_run_id == value),
+                latest_id,
+                timezone_name,
             ),
-            (criteria, alternatives, groups, participants, evaluation_count),
-            strict=True,
-        ):
-            target.metric(label, value)
-        if estimates:
-            st.dataframe(
-                [
-                    {
-                        "Test": method_label(method),
-                        "Cases": cases,
-                        "Ranking evaluations": evaluations,
-                    }
-                    for method, cases, evaluations in estimates
-                ],
-                hide_index=True,
-                width="stretch",
-            )
-        st.caption(
-            f"Estimated {case_count} counterfactual cases. Some cases may be "
-            "recorded as not evaluable under the frozen group policy."
+            key=f"processing:analysis_source:{detail.summary.session_id}",
         )
-        if AnalysisMethod.CRITERION_REMOVAL in methods and criteria < 2:
-            st.warning(
-                "Criterion removal is not evaluable because the frozen scenario "
-                "contains only one criterion."
-            )
-        if AnalysisMethod.RANK_REVERSAL in methods and alternatives < 3:
-            st.warning(
-                "Rank reversal is not evaluable with fewer than three baseline "
-                "alternatives."
-            )
-    confirmed = True
-    if evaluation_count > 500:
-        st.warning("This selection is expected to exceed 500 ranking evaluations.")
-        confirmed = st.checkbox(
-            "I understand this synchronous analysis may take a while.",
-            key=f"processing:analysis_large_confirm:{detail.summary.session_id}",
+        ranking = next(run for run in successful if run.ranking_run_id == selected_id)
+        source = next(
+            (
+                run
+                for run in weighting_runs
+                if run.processing_run_id == ranking.source_processing_run_id
+            ),
+            None,
         )
-    blockers = []
-    if executor is None:
-        blockers.append("The analysis execution service is unavailable.")
-    if not methods:
-        blockers.append("Select at least one test.")
-    if session_result is None or session_matrix is None:
-        blockers.append("The ranking lacks a session aggregate baseline.")
-    if evaluation_count > 500 and not confirmed:
-        blockers.append("Confirm the estimated large workload.")
-    if read_only:
-        blockers.append("Analysis execution is unavailable in read-only mode.")
-    if st.button(
-        "Run selected tests",
-        icon=":material/query_stats:",
-        type="primary",
-        disabled=bool(blockers),
-        key=f"processing:run_analyses:{detail.summary.session_id}",
-    ):
-        _execute(
-            context,
+        if source is None:
+            st.error("The source weighting evidence for this ranking is unavailable.")
+            return
+
+        render_section_heading("Select tests", level=3)
+        columns = st.columns(2)
+        methods = []
+        for position, method in enumerate(AnalysisMethod):
+            if columns[position % 2].checkbox(
+                method_label(method),
+                value=False,
+                key=f"processing:analysis_test:{detail.summary.session_id}:{method.value}",
+            ):
+                methods.append(method)
+        perturbation = _perturbation_configuration(
             detail.summary.session_id,
-            selected_id,
-            methods,
-            perturbation,
+            AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION in methods,
         )
-    for blocker in blockers:
-        st.caption(f"• {blocker}")
+        aggregate_matrices = tuple(
+            matrix
+            for matrix in source.matrices
+            if matrix.level in {"stakeholder_group", "session"}
+        )
+        session_matrix = next(
+            (matrix for matrix in source.matrices if matrix.level == "session"), None
+        )
+        criteria = len(session_matrix.criterion_ids) if session_matrix else 0
+        session_result = next(
+            (result for result in ranking.results if result.level == "session"), None
+        )
+        alternatives = len(session_result.alternatives) if session_result else 0
+        groups = sum(
+            matrix.level == "stakeholder_group" for matrix in aggregate_matrices
+        )
+        participants = sum(
+            item.inclusion_status.value == "included" for item in source.submissions
+        )
+        estimates = workload_estimates(
+            methods,
+            scopes=len(aggregate_matrices),
+            criteria=criteria,
+            alternatives=alternatives,
+            groups=groups,
+            participants=participants,
+            perturbation_parameters=perturbation,
+        )
+        case_count = sum(item[1] for item in estimates)
+        evaluation_count = sum(item[2] for item in estimates)
+        with st.expander("Eligibility and estimated workload", expanded=bool(methods)):
+            metrics = st.columns(5)
+            for target, label, value in zip(
+                metrics,
+                (
+                    "Criteria",
+                    "Alternatives",
+                    "Groups",
+                    "Participants",
+                    "Ranking evaluations",
+                ),
+                (criteria, alternatives, groups, participants, evaluation_count),
+                strict=True,
+            ):
+                target.metric(label, value, border=True)
+            if estimates:
+                st.dataframe(
+                    [
+                        {
+                            "Test": method_label(method),
+                            "Cases": cases,
+                            "Ranking evaluations": evaluations,
+                        }
+                        for method, cases, evaluations in estimates
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
+            st.caption(
+                f"Estimated {case_count} counterfactual cases. Some cases may be "
+                "recorded as not evaluable under the frozen group policy."
+            )
+            if AnalysisMethod.CRITERION_REMOVAL in methods and criteria < 2:
+                st.warning(
+                    "Criterion removal is not evaluable because the frozen scenario "
+                    "contains only one criterion."
+                )
+            if AnalysisMethod.RANK_REVERSAL in methods and alternatives < 3:
+                st.warning(
+                    "Rank reversal is not evaluable with fewer than three baseline "
+                    "alternatives."
+                )
+        confirmed = True
+        if evaluation_count > 500:
+            st.warning("This selection is expected to exceed 500 ranking evaluations.")
+            confirmed = st.checkbox(
+                "I understand this synchronous analysis may take a while.",
+                key=f"processing:analysis_large_confirm:{detail.summary.session_id}",
+            )
+        blockers = []
+        if executor is None:
+            blockers.append("The analysis execution service is unavailable.")
+        if not methods:
+            blockers.append("Select at least one test.")
+        if session_result is None or session_matrix is None:
+            blockers.append("The ranking lacks a session aggregate baseline.")
+        if evaluation_count > 500 and not confirmed:
+            blockers.append("Confirm the estimated large workload.")
+        if read_only:
+            blockers.append("Analysis execution is unavailable in read-only mode.")
+        if st.button(
+            "Run selected tests",
+            icon=":material/query_stats:",
+            type="primary",
+            disabled=bool(blockers),
+            key=f"processing:run_analyses:{detail.summary.session_id}",
+        ):
+            _execute(
+                context,
+                detail.summary.session_id,
+                selected_id,
+                methods,
+                perturbation,
+            )
+        for blocker in blockers:
+            st.caption(f"• {blocker}")
     feedback = st.session_state.pop("processing:analysis_feedback", None)
     if isinstance(feedback, Mapping):
         failures = int(feedback.get("failures", 0))
@@ -220,7 +226,8 @@ def render_analysis_stage(
             history = history_service.execute(detail.summary.session_id)
         except ValueError as error:
             st.error(str(error), icon=":material/error:")
-    _results(context, tuple(history), selected_id, detail.summary.session_id)
+    with surface(key="analysis:results"):
+        _results(context, tuple(history), selected_id, detail.summary.session_id)
 
 
 def _perturbation_configuration(session_id: str, selected: bool) -> dict[str, Decimal]:
@@ -408,7 +415,7 @@ def _execute(context, session_id, ranking_id, methods, perturbation):
 
 
 def _results(context, runs, selected_ranking_id: str, session_id: str) -> None:
-    st.markdown("#### Analysis results")
+    render_section_heading("Analysis results", level=3)
     tabs = st.tabs(tuple(method_label(method) for method in AnalysisMethod))
     for tab, method in zip(tabs, AnalysisMethod, strict=True):
         with tab:
@@ -444,16 +451,22 @@ def _results(context, runs, selected_ranking_id: str, session_id: str) -> None:
                     st.json(_provenance(run))
                 continue
             summary = _summary(run)
-            st.markdown("##### Whole analysis run")
+            render_section_heading("Whole analysis run", level=4)
             st.caption(
                 "These totals cover every result level evaluated by this immutable run."
             )
-            metrics = st.columns(4)
-            metrics[0].metric("Evaluated", summary.get("evaluated_count", 0))
-            metrics[1].metric("Not evaluable", summary.get("not_evaluable_count", 0))
-            metrics[2].metric("Top-set changes", summary.get("top_set_change_count", 0))
+            metrics = metric_row(4, key=f"analysis_section:_results:0:{method.value}")
+            metrics[0].metric(
+                "Evaluated", summary.get("evaluated_count", 0), border=True
+            )
+            metrics[1].metric(
+                "Not evaluable", summary.get("not_evaluable_count", 0), border=True
+            )
+            metrics[2].metric(
+                "Top-set changes", summary.get("top_set_change_count", 0), border=True
+            )
             metrics[3].metric(
-                "Strict reversals", summary.get("strict_reversal_count", 0)
+                "Strict reversals", summary.get("strict_reversal_count", 0), border=True
             )
             if summary.get("instability_detected"):
                 st.warning(
@@ -470,7 +483,7 @@ def _results(context, runs, selected_ranking_id: str, session_id: str) -> None:
                 "Assumptions, execution provenance, and hashes", expanded=False
             ):
                 st.json(_provenance(run))
-            st.markdown("##### Results by level")
+            render_section_heading("Results by level", level=4)
             _result_levels(context, run, method, summary)
             safe = next(
                 (
@@ -533,7 +546,7 @@ def _result_levels(context, run, method, run_summary) -> None:
         group_label = labels[group_id]
     surface_key = f"analysis_{run.analysis_run_id}_{level}_{group_id or 'aggregate'}"
     with admin_surface(key=surface_key, variant=variant):
-        st.markdown(f"##### {title}")
+        render_section_heading(f"{title}", level=4)
         st.caption(description)
         if group_label is not None:
             st.caption(f"Selected stakeholder group: {group_label}")
@@ -638,14 +651,22 @@ def _render_level_summary(context, run, *, level, group_id):
     except (PageQueryError, AttributeError) as error:
         st.error(str(error), icon=":material/error:")
         return None
-    first = st.columns(3)
-    first[0].metric("Evaluated", summary.evaluated_count)
-    first[1].metric("Not evaluable", summary.not_evaluable_count)
-    first[2].metric("Warnings", summary.warning_count)
-    second = st.columns(3)
-    second[0].metric("Top-set changes", summary.top_set_change_count)
-    second[1].metric("Strict reversals", summary.strict_reversal_count)
-    second[2].metric("Maximum displacement", summary.maximum_rank_displacement)
+    first = metric_row(
+        3,
+        key=f"analysis_section:_render_level_summary:0:{run.analysis_run_id}:{level}:{group_id}",
+    )
+    first[0].metric("Evaluated", summary.evaluated_count, border=True)
+    first[1].metric("Not evaluable", summary.not_evaluable_count, border=True)
+    first[2].metric("Warnings", summary.warning_count, border=True)
+    second = metric_row(
+        3,
+        key=f"analysis_section:_render_level_summary:1:{run.analysis_run_id}:{level}:{group_id}",
+    )
+    second[0].metric("Top-set changes", summary.top_set_change_count, border=True)
+    second[1].metric("Strict reversals", summary.strict_reversal_count, border=True)
+    second[2].metric(
+        "Maximum displacement", summary.maximum_rank_displacement, border=True
+    )
     if summary.evaluated_count == 0:
         st.info("No cases were evaluable at this result level.")
     elif summary.top_set_change_count or summary.strict_reversal_count:
@@ -669,7 +690,7 @@ def _render_stability_bounds(method, run_summary, *, level, group_id) -> None:
     rows = _stability_rows(run_summary, level=level, group_id=group_id)
     if not rows:
         return
-    st.markdown("##### Sampled stability bounds")
+    render_section_heading("Sampled stability bounds", level=4)
     st.caption(
         "These are observed grid bounds for this result level, not exact "
         "mathematical breakpoints."

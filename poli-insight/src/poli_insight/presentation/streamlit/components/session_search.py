@@ -62,7 +62,7 @@ def render_session_search(
         key=f"{key}:domain",
     )
 
-    date_controls = st.columns((0.3, 0.15, 0.55), vertical_alignment="center")
+    date_controls = st.columns((0.3, 0.3, 0.4), vertical_alignment="bottom")
     date_field = cast(
         SessionDateField,
         date_controls[0].selectbox(

@@ -163,6 +163,8 @@ class ParticipationQuestion:
     target_description: str | None
     left_name: str | None
     right_name: str | None
+    left_description: str | None = None
+    right_description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

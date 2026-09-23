@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -43,6 +42,12 @@ from poli_insight.presentation.streamlit.components.layout import (
     format_datetime,
     render_empty_state,
     render_page_header,
+    render_section_heading,
+    surface,
+)
+from poli_insight.presentation.streamlit.components.preference_slider import (
+    balanced_options,
+    preference_slider,
 )
 from poli_insight.presentation.streamlit.context import PageContext
 from poli_insight.presentation.streamlit.urls import (
@@ -51,7 +56,6 @@ from poli_insight.presentation.streamlit.urls import (
 )
 
 _SEARCH_KEY = "participate:search"
-_PAIRWISE_LEFT_KEY = "participate:pairwise-left"
 _PENDING_RESUME_KEY = "participate:pending-resume-credential"
 
 
@@ -98,7 +102,7 @@ def _render_catalog(context: PageContext) -> None:
         [0.4, 0.6],
     )
 
-    with invite, st.container(border=True):
+    with invite, surface(key="participate:invitation", variant="filter"):
         st.subheader("Have an invitation or private resume link?", anchor=False)
         st.write(
             "Open the complete link supplied by the researcher. Unlisted and "
@@ -137,7 +141,9 @@ def _render_session_card(
     *,
     timezone_name: str,
 ) -> None:
-    with st.container(border=True):
+    with surface(
+        key=f"participate:session-card:{session.session_id}", variant="feature"
+    ):
         header_columns = st.columns([0.7, 0.3], vertical_alignment="center")
         with header_columns[0]:
             st.subheader(session.title, anchor=False)
@@ -220,8 +226,8 @@ def _render_enrollment(context: PageContext, slug: str) -> None:
         _back_to_catalog()
         return
     enrollment_key = f"participate:enroll:{session.session_id}"
-    with st.container(border=True):
-        st.markdown("#### Participant access")
+    with surface(key=enrollment_key):
+        render_section_heading("Participant access")
         alias = st.text_input(
             "Participant alias (optional)",
             max_chars=160,
@@ -279,20 +285,21 @@ def _render_enrollment(context: PageContext, slug: str) -> None:
         return
     if enroll:
         try:
-            result = context.container.participation.enroll.execute(
-                EnrollParticipantCommand(
-                    session_id=session.session_id,
-                    selected_group_id=selected_group_id,
-                    invitation_token=invitation_token,
-                    access_code=access_code or None,
-                    user_id=(
-                        context.principal.subject
-                        if session.identity_policy == "authenticated"
-                        else None
-                    ),
-                    alias=alias.strip() or None,
+            with st.spinner("Preparing your questionnaire…"):
+                result = context.container.participation.enroll.execute(
+                    EnrollParticipantCommand(
+                        session_id=session.session_id,
+                        selected_group_id=selected_group_id,
+                        invitation_token=invitation_token,
+                        access_code=access_code or None,
+                        user_id=(
+                            context.principal.subject
+                            if session.identity_policy == "authenticated"
+                            else None
+                        ),
+                        alias=alias.strip() or None,
+                    )
                 )
-            )
         except EnrollParticipantError:
             st.error(
                 "Enrollment could not be authorized. Check the invitation, "
@@ -411,8 +418,8 @@ def _render_authenticated_workspace(context: PageContext, access_token: str) -> 
             eyebrow="Questionnaire workspace",
             title=workspace.session.title,
             description=(
-                "Your progress is saved to this private link. Keep it private "
-                "and bookmark it if you plan to return later."
+                "Your answers are saved when you move between questions or select "
+                "Save draft. Keep this private link if you plan to return later."
             ),
         )
     )
@@ -443,37 +450,23 @@ def _render_authenticated_workspace(context: PageContext, access_token: str) -> 
             ":material/task_alt:",
         ),
         horizontal=True,
-        key=f"participation:{workspace.participant_id}",
+        key=f"participation:{workspace.participant_id}:{workspace.attempt_number or 1}",
     )
-    with wizard[0]:
-        if _render_consent(context, workspace, access_token):
+    if wizard.current > 0 and not _consent_ready(workspace):
+        wizard.set(0)
+    if wizard.current == 0:
+        with surface(key="participate:consent"):
+            if _render_consent(context, workspace, access_token):
+                wizard.next()
+    elif wizard.current == 1:
+        if _render_questionnaire(context, workspace, access_token):
             wizard.next()
-    with wizard[1]:
-        if not _consent_ready(workspace):
-            st.info("Complete consent before beginning the questionnaire.")
-        elif _render_questionnaire(context, workspace, access_token):
-            refreshed = context.queries.get_participation_workspace(
-                workspace.participant_id
-            )
-            if refreshed is not None:
-                workspace = refreshed
-            wizard.next()
-    with wizard[2]:
-        _render_review(context, workspace, access_token, wizard)
-    with wizard[3]:
-        refreshed = context.queries.get_participation_workspace(
-            workspace.participant_id
-        )
-        if (
-            refreshed is not None
-            and refreshed.submission_status == SubmissionStatus.SUBMITTED
-        ):
-            _render_completion(
-                refreshed,
-                results_url=_released_results_url(context, refreshed, access_token),
-            )
-        else:
-            st.info("Review and submit your questionnaire to complete participation.")
+    elif wizard.current == 2:
+        with surface(key="participate:review"):
+            _render_review(context, workspace, access_token, wizard)
+    else:
+        # A draft cannot enter Complete by manipulating wizard state.
+        wizard.set(1)
 
 
 def _render_consent(
@@ -481,7 +474,7 @@ def _render_consent(
     workspace: ParticipationWorkspace,
     access_token: str,
 ) -> bool:
-    st.markdown("#### Study consent")
+    render_section_heading("Study consent", level=3)
     if not workspace.consent_required:
         st.info(
             "This questionnaire does not require a separate consent acknowledgement."
@@ -494,17 +487,18 @@ def _render_consent(
         )
         return st.button("Continue to questionnaire", type="primary")
     st.subheader(workspace.consent_title, anchor=False)
-    with st.container(border=True):
+    with surface(key="participate:consent-statement"):
         st.write(workspace.consent_statement)
     accepted = st.checkbox(
         "I have read this statement and voluntarily consent to participate."
     )
     if st.button("Record consent", type="primary", disabled=not accepted):
         try:
-            context.container.participation.capture_consent.execute(
-                access_token=access_token,
-                accepted=accepted,
-            )
+            with st.spinner("Recording consent…"):
+                context.container.participation.capture_consent.execute(
+                    access_token=access_token,
+                    accepted=accepted,
+                )
         except ParticipantAccessError as error:
             st.error(str(error), icon=":material/error:")
             return False
@@ -523,25 +517,41 @@ def _render_questionnaire(
     return _render_direct(context, workspace, access_token)
 
 
+@dataclass
+class _QuestionnaireDraft:
+    answers: dict[str, str | None]
+    current: int
+    requested: int | None = None
+    notice: str | None = None
+
+
+def _questionnaire_key(workspace: ParticipationWorkspace) -> str:
+    # The first save changes attempt_number from None to 1, not to a new draft.
+    return (
+        f"participate:questionnaire:{workspace.participant_id}:"
+        f"{workspace.attempt_number or 1}"
+    )
+
+
+def _saved_answers(workspace: ParticipationWorkspace) -> dict[str, str | None]:
+    valid = {option.scale_value_id for option in workspace.scale_options}
+    answers = {}
+    for question in workspace.questions:
+        value = workspace.answers.get(question.question_definition_id, {}).get(
+            "selected_scale_value_id"
+        )
+        answers[question.question_definition_id] = (
+            value if isinstance(value, str) and value in valid else None
+        )
+    return answers
+
+
 def _render_direct(
     context: PageContext,
     workspace: ParticipationWorkspace,
     access_token: str,
 ) -> bool:
-    st.markdown("#### Rate each criterion")
-    st.write(
-        f"Choose one value from **{workspace.scale_name}** for every required item."
-    )
-    answers = _answer_form(workspace, workspace.questions, key="direct")
-    complete = _required_complete(workspace.questions, answers)
-    return _save_controls(
-        context,
-        workspace,
-        access_token,
-        answers,
-        complete=complete,
-        continue_label="Save and review",
-    )
+    return _render_question_navigation(context, workspace, access_token)
 
 
 def _render_pairwise(
@@ -549,40 +559,181 @@ def _render_pairwise(
     workspace: ParticipationWorkspace,
     access_token: str,
 ) -> bool:
-    grouped: dict[str, list[ParticipationQuestion]] = defaultdict(list)
-    for question in workspace.questions:
-        grouped[question.left_name or "Criterion"].append(question)
-    left_names = tuple(grouped)
-    current = min(int(st.session_state.get(_PAIRWISE_LEFT_KEY, 0)), len(left_names) - 1)
-    left_name = left_names[current]
-    completed_count = sum(
-        question.question_definition_id in workspace.answers
-        for question in workspace.questions
+    return _render_question_navigation(context, workspace, access_token)
+
+
+def _render_question_navigation(
+    context: PageContext,
+    workspace: ParticipationWorkspace,
+    access_token: str,
+) -> bool:
+    questions = tuple(sorted(workspace.questions, key=lambda item: item.display_order))
+    if not questions:
+        st.info("There are no questions in this questionnaire.")
+        return False
+    scope = _questionnaire_key(workspace)
+    if scope not in st.session_state:
+        saved = _saved_answers(workspace)
+        first_missing = next(
+            (
+                i
+                for i, question in enumerate(questions)
+                if question.required and saved[question.question_definition_id] is None
+            ),
+            0,
+        )
+        st.session_state[scope] = _QuestionnaireDraft(saved, first_missing)
+    draft = st.session_state[scope]
+    draft.current = max(0, min(draft.current, len(questions) - 1))
+    question = questions[draft.current]
+    render_section_heading(
+        "Compare criteria"
+        if workspace.response_format == ResponseFormat.PAIRWISE
+        else "Rate each criterion",
+        level=3,
     )
-    st.progress(
-        completed_count / len(workspace.questions),
-        text=f"{completed_count} of {len(workspace.questions)} comparisons saved",
+    st.write("Choose your preference, then use Next. You can return to any question.")
+    # Populate this container after capturing this run's current answer, so the
+    # progress and selector reflect it immediately while appearing above the card.
+    overview = st.container()
+    draft.answers.update(
+        _answer_form(
+            workspace,
+            (question,),
+            key=f"{scope}:input",
+            defaults=draft.answers,
+        )
     )
-    st.markdown(f"#### Compare {left_name}")
-    st.write(
-        "For each row, compare the left-side criterion with the right-side criterion."
+    valid = {option.scale_value_id for option in workspace.scale_options}
+    answers = {
+        item.question_definition_id: (
+            value
+            if isinstance(value := draft.answers.get(item.question_definition_id), str)
+            and value in valid
+            else None
+        )
+        for item in questions
+    }
+    draft.answers = answers
+    complete = _required_complete(questions, answers)
+    answered = sum(value is not None for value in answers.values())
+    with overview:
+        st.progress(
+            answered / len(questions), text=f"{answered} of {len(questions)} answered"
+        )
+        selector_key = f"{scope}:selector"
+
+        def request_question() -> None:
+            draft.requested = st.session_state[selector_key]
+
+        def question_label(index: int) -> str:
+            item = questions[index]
+            label = (
+                f"{item.left_name} compared with {item.right_name}"
+                if item.left_name and item.right_name
+                else item.prompt
+            )
+            status = (
+                "Answered"
+                if answers[item.question_definition_id] is not None
+                else "Unanswered"
+            )
+            optional = " · Optional" if not item.required else ""
+            return f"{index + 1}. {label} — {status}{optional}"
+
+        # Restore the displayed position before mounting. The callback stores the
+        # requested destination; it becomes current only after a successful save.
+        st.session_state[selector_key] = draft.current
+        st.selectbox(
+            "Question",
+            options=range(len(questions)),
+            format_func=question_label,
+            key=selector_key,
+            on_change=request_question,
+        )
+
+    previous_column, position_column, next_column = st.columns([1, 1, 1])
+    previous = previous_column.button(
+        "Previous",
+        icon=":material/arrow_back:",
+        width="stretch",
+        disabled=draft.current == 0,
+        key=f"{scope}:previous",
     )
-    questions = tuple(grouped[left_name])
-    answers = _answer_form(workspace, questions, key=f"pairwise:{current}")
-    page_complete = _required_complete(questions, answers)
-    final_left = current == len(left_names) - 1
-    continued = _save_controls(
-        context,
-        workspace,
-        access_token,
-        answers,
-        complete=page_complete,
-        continue_label=("Save and review" if final_left else "Save and compare next"),
+    position_column.caption(f"Question {draft.current + 1} of {len(questions)}")
+    next_clicked = next_column.button(
+        "Next",
+        icon=":material/arrow_forward:",
+        width="stretch",
+        disabled=draft.current == len(questions) - 1,
+        key=f"{scope}:next",
     )
-    if continued and not final_left:
-        st.session_state[_PAIRWISE_LEFT_KEY] = current + 1
-        st.rerun()
-    return continued and final_left
+    saved_answers = _saved_answers(workspace)
+    st.caption(
+        "You have unsaved changes."
+        if answers != saved_answers
+        else "Your answers are saved."
+        if workspace.submission_id
+        else "Your progress will be saved when you move to another question."
+    )
+    save_column, review_column = st.columns(2)
+    save = save_column.button(
+        "Save draft", icon=":material/save:", width="stretch", key=f"{scope}:save"
+    )
+    review = review_column.button(
+        "Save and review",
+        icon=":material/rate_review:",
+        type="primary",
+        width="stretch",
+        disabled=not complete,
+        key=f"{scope}:review",
+    )
+    if not complete:
+        remaining = sum(
+            item.required and answers[item.question_definition_id] is None
+            for item in questions
+        )
+        noun = "question" if remaining == 1 else "questions"
+        st.caption(f"Answer the remaining {remaining} required {noun} to review.")
+    if draft.notice:
+        st.success(draft.notice)
+        draft.notice = None
+
+    destination = draft.requested
+    draft.requested = None
+    if previous and draft.current > 0:
+        destination = draft.current - 1
+    if next_clicked and draft.current < len(questions) - 1:
+        destination = draft.current + 1
+    if destination is not None:
+        destination = max(0, min(destination, len(questions) - 1))
+    navigating = destination is not None and destination != draft.current
+    if not (save or review or navigating):
+        return False
+    if review and not complete:
+        return False
+    if not _save_answers(context, workspace, access_token, answers):
+        return False
+    if review:
+        refreshed = context.queries.get_participation_workspace(
+            workspace.participant_id
+        )
+        if (
+            refreshed is None
+            or not _required_complete(refreshed.questions, _saved_answers(refreshed))
+            or refreshed.submission_id is None
+        ):
+            st.error(
+                "Your saved answers are not yet complete. Please save and try again."
+            )
+            return False
+        return True
+    if navigating:
+        draft.current = destination
+    else:
+        draft.notice = "Draft saved. You may safely return using this private link."
+    st.rerun()
+    return False
 
 
 def _answer_form(
@@ -590,57 +741,75 @@ def _answer_form(
     questions: tuple[ParticipationQuestion, ...],
     *,
     key: str,
+    defaults: dict[str, str | None] | None = None,
 ) -> dict[str, str | None]:
     option_ids = tuple(option.scale_value_id for option in workspace.scale_options)
     option_by_id = {option.scale_value_id: option for option in workspace.scale_options}
     answers: dict[str, str | None] = {}
     for question in questions:
         existing = workspace.answers.get(question.question_definition_id, {})
-        selected_id = existing.get("selected_scale_value_id")
-        index = option_ids.index(selected_id) if selected_id in option_ids else None
+        selected_id = (
+            defaults.get(question.question_definition_id)
+            if defaults is not None
+            else existing.get("selected_scale_value_id")
+        )
+        default = selected_id if selected_id in option_ids else None
         label = question.prompt
         if question.left_name and question.right_name:
             label = f"{question.left_name} compared with {question.right_name}"
-        answers[question.question_definition_id] = st.selectbox(
-            label,
-            options=option_ids,
-            index=index,
-            format_func=lambda value: option_by_id[value].label,
-            placeholder="Choose a rating",
-            key=f"participate:{key}:{question.question_definition_id}",
-            help=question.target_description,
-        )
+        with surface(
+            key=f"participate:question:{key}:{question.question_definition_id}"
+        ):
+            st.caption("Required" if question.required else "Optional")
+            if (
+                workspace.response_format == ResponseFormat.PAIRWISE
+                and question.left_name
+                and question.right_name
+                and (
+                    choices := balanced_options(
+                        workspace.scale_options,
+                        left_name=question.left_name,
+                        right_name=question.right_name,
+                    )
+                )
+                is not None
+            ):
+                answers[question.question_definition_id] = preference_slider(
+                    choices=choices,
+                    left_name=question.left_name,
+                    right_name=question.right_name,
+                    left_description=question.left_description,
+                    right_description=question.right_description,
+                    value=default,
+                    key=f"{key}:{question.question_definition_id}",
+                )
+                continue
+            if question.target_description:
+                st.text(question.target_description)
+            answers[question.question_definition_id] = st.select_slider(
+                label,
+                options=(None, *option_ids),
+                value=default,
+                format_func=lambda value: (
+                    "Not answered" if value is None else option_by_id[value].label
+                ),
+                key=f"{key}:{question.question_definition_id}",
+                help=question.target_description,
+            )
+            st.caption(
+                f"Scale: {workspace.scale_options[0].label} → "
+                f"{workspace.scale_options[-1].label}. "
+                "Choose ‘Not answered’ to leave this item blank."
+            )
     return answers
 
 
-def _save_controls(
+def _save_answers(
     context: PageContext,
     workspace: ParticipationWorkspace,
     access_token: str,
     answers: dict[str, str | None],
-    *,
-    complete: bool,
-    continue_label: str,
 ) -> bool:
-    st.caption(
-        f"Saved answers: {len(workspace.answers)} of {len(workspace.questions)}"
-        + (
-            f" · Last saved {workspace.last_saved_at.isoformat()}"
-            if workspace.last_saved_at
-            else ""
-        )
-    )
-    columns = st.columns(2)
-    save = columns[0].button("Save draft", icon=":material/save:", width="stretch")
-    continue_clicked = columns[1].button(
-        continue_label,
-        icon=":material/arrow_forward:",
-        type="primary",
-        width="stretch",
-        disabled=not complete,
-    )
-    if not save and not continue_clicked:
-        return False
     updates = tuple(
         DraftAnswerInput(
             question_definition_id=question_id,
@@ -655,36 +824,35 @@ def _save_controls(
         if selected_id is None and question_id in workspace.answers
     )
     try:
-        context.container.submissions.save_draft.execute(
-            SaveSubmissionDraftCommand(
-                session_id=workspace.session.session_id,
-                participant_id=workspace.participant_id,
-                actor_id=workspace.participant_id,
-                answers=updates,
-                remove_question_definition_ids=removals,
-                access_token=access_token,
+        with st.spinner("Saving your answers…"):
+            context.container.submissions.save_draft.execute(
+                SaveSubmissionDraftCommand(
+                    session_id=workspace.session.session_id,
+                    participant_id=workspace.participant_id,
+                    actor_id=workspace.participant_id,
+                    answers=updates,
+                    remove_question_definition_ids=removals,
+                    access_token=access_token,
+                )
             )
-        )
     except SaveSubmissionDraftError as error:
         st.error(str(error), icon=":material/error:")
         return False
-    if not continue_clicked:
-        st.success("Draft saved. You may safely return using this private link.")
-    return continue_clicked
+    return True
 
 
 def _render_review(
     context: PageContext,
     workspace: ParticipationWorkspace,
     access_token: str,
-    wizard: object,
+    wizard,
 ) -> None:
-    st.markdown("#### Review your responses")
+    render_section_heading("Review your responses", level=3)
+    saved_answers = _saved_answers(workspace)
     missing = [
         question
         for question in workspace.questions
-        if question.required
-        and question.question_definition_id not in workspace.answers
+        if question.required and saved_answers[question.question_definition_id] is None
     ]
     if missing:
         st.warning(
@@ -711,6 +879,8 @@ def _render_review(
         hide_index=True,
         width="stretch",
     )
+    if st.button("Edit answers", icon=":material/edit:"):
+        wizard.previous()
     confirmed = st.checkbox(
         "I have reviewed these responses and understand submission is final."
     )
@@ -720,16 +890,24 @@ def _render_review(
         icon=":material/send:",
         disabled=bool(missing) or not confirmed or workspace.submission_id is None,
     ):
+        if (
+            missing
+            or not confirmed
+            or workspace.submission_id is None
+            or not _consent_ready(workspace)
+        ):
+            return
         try:
-            context.container.submissions.submit.execute(
-                SubmitResponseCommand(
-                    session_id=workspace.session.session_id,
-                    participant_id=workspace.participant_id,
-                    submission_id=workspace.submission_id or "",
-                    actor_id=workspace.participant_id,
-                    access_token=access_token,
+            with st.spinner("Submitting your questionnaire…"):
+                context.container.submissions.submit.execute(
+                    SubmitResponseCommand(
+                        session_id=workspace.session.session_id,
+                        participant_id=workspace.participant_id,
+                        submission_id=workspace.submission_id or "",
+                        actor_id=workspace.participant_id,
+                        access_token=access_token,
+                    )
                 )
-            )
         except SubmitResponseError as error:
             st.error(str(error), icon=":material/error:")
             return

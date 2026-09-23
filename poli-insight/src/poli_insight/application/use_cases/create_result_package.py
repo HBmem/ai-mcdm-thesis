@@ -470,6 +470,7 @@ class CreateResultPackage:
     def _input_manifest(command, context) -> dict[str, object]:
         return {
             "schema_version": 1,
+            "aggregate_projection_version": 2,
             "session_id": command.session_id,
             "processing": {
                 "id": context["processing"].processing_run_id,
@@ -523,6 +524,14 @@ class CreateResultPackage:
         )
         warnings = (
             ["privacy.small_stakeholder_group"] if context["small_groups"] else []
+        )
+        effective_group_powers = _effective_group_powers(
+            configuration,
+            {
+                matrix.stakeholder_group_id: matrix
+                for matrix in processing.matrices
+                if matrix.level == "stakeholder_group"
+            },
         )
         all_by_method: dict[AnalysisMethod, list[AnalysisRun]] = {}
         for item in context["all_analyses"]:
@@ -655,6 +664,11 @@ class CreateResultPackage:
                             str(
                                 Decimal(item.allocation_units)
                                 / Decimal(configuration.allocation_total_units)
+                            )
+                        ),
+                        "effective_voting_power": str(
+                            effective_group_powers.get(
+                                item.session_stakeholder_group_id, Decimal(0)
                             )
                         ),
                         "included_participant_count": group_counts[

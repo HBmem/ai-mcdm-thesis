@@ -10,150 +10,96 @@ from poli_insight.presentation.streamlit.pages.public import published_results
 REPORTS_APP = r"""
 from datetime import UTC, datetime
 from types import SimpleNamespace
-
+import streamlit as st
 from poli_insight.application.queries.page_queries import PageResult
-from poli_insight.domain.enum import BundleVariant, RunInclusionStatus, RunStatus
+from poli_insight.presentation.streamlit.auth.models import Principal
 from poli_insight.presentation.streamlit.pages.admin.reports import render
 
-now = datetime(2026, 9, 12, tzinfo=UTC)
-variant_artifacts = tuple(
-    SimpleNamespace(
-        name=f"{variant.value}_manifest",
-        variant=variant,
-        content_json={
-            "schema_version": 1,
-            "privacy_label": variant.value,
-            "completeness": [],
-            "warnings": [],
-        },
-    )
-    for variant in BundleVariant
-)
-artifacts = (
-    SimpleNamespace(
-        name="02_configuration",
-        variant=None,
-        content_json={"configuration_version_id": "configuration-1"},
-    ),
-    *variant_artifacts,
-)
-subject = SimpleNamespace(
-    package_subject_id="subject-row-1",
-    alias_snapshot="Participant 001",
-    stakeholder_group_label="Residents",
-    inclusion_status=RunInclusionStatus.INCLUDED,
-    result_json={
-        "inclusion": {"status": "included"},
-        "preferences": {},
-        "weights": {},
-        "rankings": {},
-        "stakeholder_representation": {},
-        "participant_influence": {"status": "not_measured"},
-    },
-)
 package = SimpleNamespace(
-    package_run_id="package-1",
-    run_number=1,
-    status=RunStatus.SUCCEEDED,
-    variants=(BundleVariant.ANONYMOUS, BundleVariant.PUBLIC),
-    source_roster_hash="a" * 64,
-    source_processing_run_id="processing-1",
-    source_ranking_run_id="ranking-1",
-    source_analysis_run_ids=("analysis-1",),
-    source_processing_output_hash="b" * 64,
-    source_ranking_output_hash="c" * 64,
-    input_hash="d" * 64,
-    output_hash="e" * 64,
-    completed_at=now,
-    artifacts=artifacts,
-    subjects=(subject,),
+    package_run_id="package-1", session_id="session-1", run_number=1,
+    source_analysis_run_ids=("analysis-1",), source_roster_hash="roster-1",
+    configuration_version_id="configuration-1", output_hash="a"*64,
+    completed_at=datetime(2026,9,12,tzinfo=UTC),
 )
-
 class Queries:
+    def list_session_scenarios(self): return ()
+    def list_scenario_domains(self): return ()
     def list_processing_sessions(self, **arguments):
-        item = SimpleNamespace(
-            session_id="session-1",
-            title="Transit priorities",
-            current_roster_hash="a" * 64,
-            active_configuration_version_id="configuration-1",
-        )
+        st.session_state["test:queries"] = st.session_state.get("test:queries",0)+1
+        item = SimpleNamespace(session_id="session-1", title="Transit priorities",
+            current_roster_hash="roster-1", active_configuration_version_id="configuration-1")
         return PageResult((item,), 1, 100, 1)
-
-class Packages:
-    list_runs = SimpleNamespace(execute=lambda session_id: (package,))
-    list_releases = SimpleNamespace(execute=lambda session_id: ())
-    export = SimpleNamespace(
-        execute=lambda run_id, variant: SimpleNamespace(
-            content=b"zip", filename=f"{variant.value}.zip", media_type="application/zip"
-        )
-    )
-    render_report = SimpleNamespace(
-        execute=lambda run_id, variant: SimpleNamespace(
-            content=b"html", filename=f"{variant.value}.html", media_type="text/html"
-        )
-    )
-    release_participants = SimpleNamespace()
-    withdraw_participants = SimpleNamespace()
-
-context = SimpleNamespace(
-    queries=Queries(),
-    container=SimpleNamespace(
-        settings=SimpleNamespace(app_timezone="UTC"),
-        packages=Packages(),
-    ),
-    principal=SimpleNamespace(subject="admin-1"),
-)
+class Reporting:
+    admin_role="admin"
+    def package_options(self, actor, session_id): return (package,)
+    def workspace(self, actor, session_id, **kwargs):
+        st.session_state["test:workspace"] = st.session_state.get("test:workspace",0)+1
+        assert kwargs.get("include_documents") is False, "Overview must not load documents"
+        return {"reports":(), "releases":()}
+context = SimpleNamespace(queries=Queries(),
+    container=SimpleNamespace(settings=SimpleNamespace(app_timezone="UTC"),reporting=Reporting()),
+    principal=Principal("admin-1","Admin",frozenset({"admin"})))
 render(context)
 """
 
 
-def test_package_stage_requires_explicit_variants_and_has_live_progress() -> None:
+def test_package_stage_retains_processing_but_report_workspace_has_no_legacy_exports():
     source = inspect.getsource(package_section.render_package_stage)
-
-    assert '"Anonymous aggregate bundle"' in source
-    assert '"Public / identity-linked bundle"' in source
-    assert source.count("st.progress(") == 2
-    assert "st.status(" in source
-    assert "value=False" in source
-    assert "small-group aggregates" in source
-
-
-def test_reporting_workspace_separates_variants_and_has_non_ai_exports() -> None:
-    render_source = inspect.getsource(reports.render)
-    variant_source = inspect.getsource(reports._variant_workspace)
-
-    assert '"Anonymous aggregate bundle"' in render_source
-    assert '"Public / identity-linked bundle"' in render_source
-    assert '"Export complete bundle"' in variant_source
-    assert '"Generate readable report"' in variant_source
-    assert "release_participants.execute" in inspect.getsource(
-        reports._participant_release_controls
-    )
-    assert "withdraw_participants.execute" in inspect.getsource(
-        reports._participant_release_controls
-    )
+    assert '"Identity-linked moderator bundle"' in source
+    source = inspect.getsource(reports)
+    for removed in (
+        "Export complete bundle",
+        "Generate readable report",
+        "Moderator-only participant directory",
+        "_variant_workspace",
+        "_participant_release_controls",
+    ):
+        assert removed not in source
 
 
-def test_reporting_workspace_renders_both_persisted_variants() -> None:
-    app = AppTest.from_string(REPORTS_APP, default_timeout=10).run()
-
+def test_reporting_tabs_are_available_without_loading_inactive_workspaces():
+    app = AppTest.from_string(REPORTS_APP).run()
     assert not app.exception
-    assert tuple(item.label for item in app.tabs) == (
-        "Anonymous aggregate bundle",
-        "Public / identity-linked bundle",
+    assert tuple(t.label for t in app.tabs) == (
+        "AI Analysis",
+        "Report Publication",
+        "LLM Configuration",
     )
-    assert tuple(item.label for item in app.get("download_button")) == (
-        "Export complete bundle",
-        "Generate readable report",
-        "Export complete bundle",
-        "Generate readable report",
-    )
+    assert app.session_state["test:queries"] == 1
+    assert "test:workspace" not in app.session_state
+    assert not app.get("download_button")
+    start = next(b for b in app.button if b.label == "Start AI analysis")
+    assert start.disabled
+    next(b for b in app.button if b.label == "Go to Report Publication").click().run()
+    assert not app.exception
+    assert app.session_state["reports:tab"] == "Report Publication"
+    assert app.session_state["test:workspace"] == 1
 
 
-def test_participant_result_page_offers_only_personal_report_download() -> None:
+def test_configuration_placeholder_works_without_sessions_or_report_queries():
+    app = AppTest.from_string(REPORTS_APP)
+    app.session_state["reports:tab"] = "LLM Configuration"
+    app.run()
+    assert not app.exception
+    assert "test:queries" not in app.session_state
+    assert "test:workspace" not in app.session_state
+    assert not app.text_input
+    assert any("No API keys" in c.value for c in app.caption)
+
+
+def test_configuration_and_reporting_are_admin_only():
+    app = AppTest.from_string(
+        REPORTS_APP.replace('frozenset({"admin"})', "frozenset()")
+    )
+    app.session_state["reports:tab"] = "LLM Configuration"
+    app.run()
+    assert not app.exception
+    assert any("Administrator access" in e.value for e in app.error)
+    assert "test:queries" not in app.session_state
+
+
+def test_participant_result_page_preserves_private_breakdown():
     source = inspect.getsource(published_results._render_private_result)
-
     assert '"Download my readable report"' in source
     assert "participant_access.execute" in source
-    assert "identity map are not available" in source
     assert "Export complete bundle" not in source

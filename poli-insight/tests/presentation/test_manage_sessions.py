@@ -431,7 +431,7 @@ class ManageSessionsPageTests(unittest.TestCase):
 
         self.assertFalse(app.exception)
         self.assertIn(
-            "#### Choose a ready scenario snapshot",
+            "### Choose a ready scenario snapshot",
             tuple(item.value for item in app.markdown),
         )
         self.assertTrue(
@@ -490,7 +490,7 @@ _render_creation_scenario_preview(detail)
 
         self.assertFalse(app.exception)
         self.assertIn(
-            "#### School closure",
+            "### School closure",
             tuple(item.value for item in app.markdown),
         )
         self.assertEqual(
@@ -550,7 +550,7 @@ _render_creation_scenario_preview(detail)
 
         self.assertFalse(app.exception)
         self.assertIn(
-            "#### Review immutable version",
+            "### Review immutable version",
             tuple(item.value for item in app.markdown),
         )
         review = dict(

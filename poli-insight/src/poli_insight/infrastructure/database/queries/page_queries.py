@@ -4699,6 +4699,8 @@ def _participation_question(
         target_description=target.description if target is not None else None,
         left_name=left.name if left is not None else None,
         right_name=right.name if right is not None else None,
+        left_description=left.description if left is not None else None,
+        right_description=right.description if right is not None else None,
     )
 
 

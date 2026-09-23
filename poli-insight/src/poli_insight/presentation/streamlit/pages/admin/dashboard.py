@@ -6,8 +6,10 @@ from poli_insight.domain.enum import SessionStatus
 from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
     format_datetime,
+    metric_row,
     render_capability_notice,
     render_page_header,
+    surface,
 )
 from poli_insight.presentation.streamlit.components.status import render_status
 from poli_insight.presentation.streamlit.context import PageContext
@@ -26,19 +28,19 @@ def render(context: PageContext) -> None:
     )
     snapshot = context.queries.get_admin_dashboard()
 
-    cards = st.columns(4)
-    cards[0].metric("Draft", snapshot.count(SessionStatus.DRAFT))
-    cards[1].metric("Scheduled", snapshot.count(SessionStatus.SCHEDULED))
-    cards[2].metric("Open", snapshot.count(SessionStatus.OPEN))
-    cards[3].metric("Paused", snapshot.count(SessionStatus.PAUSED))
-    cards = st.columns(4)
-    cards[0].metric("Closed", snapshot.count(SessionStatus.CLOSED))
-    cards[1].metric("Canceled", snapshot.count(SessionStatus.CANCELED))
-    cards[2].metric("Archived", snapshot.count(SessionStatus.ARCHIVED))
+    cards = metric_row(4, key="dashboard:render:0")
+    cards[0].metric("Draft", snapshot.count(SessionStatus.DRAFT), border=True)
+    cards[1].metric("Scheduled", snapshot.count(SessionStatus.SCHEDULED), border=True)
+    cards[2].metric("Open", snapshot.count(SessionStatus.OPEN), border=True)
+    cards[3].metric("Paused", snapshot.count(SessionStatus.PAUSED), border=True)
+    cards = metric_row(4, key="dashboard:render:1")
+    cards[0].metric("Closed", snapshot.count(SessionStatus.CLOSED), border=True)
+    cards[1].metric("Canceled", snapshot.count(SessionStatus.CANCELED), border=True)
+    cards[2].metric("Archived", snapshot.count(SessionStatus.ARCHIVED), border=True)
     cards[3].metric(
         "Active now",
-        snapshot.count(SessionStatus.OPEN)
-        + snapshot.count(SessionStatus.PAUSED),
+        snapshot.count(SessionStatus.OPEN) + snapshot.count(SessionStatus.PAUSED),
+        border=True,
     )
     st.caption(
         "Generated "
@@ -52,7 +54,7 @@ def render(context: PageContext) -> None:
     paused_count = snapshot.count(SessionStatus.PAUSED)
     closed_count = snapshot.count(SessionStatus.CLOSED)
     if paused_count:
-        with st.container(border=True):
+        with surface(key="dashboard:render:1"):
             render_status(
                 SessionStatus.PAUSED,
                 detail=(
@@ -61,13 +63,13 @@ def render(context: PageContext) -> None:
                 ),
             )
     if closed_count:
-        with st.container(border=True):
+        with surface(key="dashboard:render:2"):
             render_status(
                 SessionStatus.CLOSED,
                 detail=(
                     f"{closed_count} closed session"
-                    f"{'s' if closed_count != 1 else ''} will appear in the "
-                    "processing queue when run models are implemented."
+                    f"{'s' if closed_count != 1 else ''} can be inspected in the "
+                    "processing queue."
                 ),
             )
     if not paused_count and not closed_count:
@@ -76,14 +78,15 @@ def render(context: PageContext) -> None:
             icon=":material/check_circle:",
         )
 
-    st.subheader("Foundation capability status", anchor=False)
+    st.subheader("Workspace capabilities", anchor=False)
     render_capability_notice(
         "Operational read models",
         "Public session discovery and session lifecycle counts are connected.",
         available=True,
     )
     render_capability_notice(
-        "Validation, processing, reports, and publication",
-        "Their independent read models will be connected in their scheduled "
-        "implementation phases.",
+        "Deterministic processing and reporting",
+        "Validation, weights, rankings, analysis, packages, and controlled "
+        "participant releases are available in the administrative workspaces.",
+        available=True,
     )

@@ -1,39 +1,25 @@
-# PoliInsight — Streamlit Theme Configuration
-# Two complete themes are provided below.
-# Only ONE [theme] block can be active at a time.
-# To switch themes: comment out the active block and uncomment the other.
- 
-# ──────────────────────────────────────────────
-# LIGHT THEME  (default — policy paper aesthetic)
-# ──────────────────────────────────────────────
+# Native controls share the same palette as components/theme.py.
 [theme]
-base                  = "light"
-primaryColor          = "#C4932A"          # Gold — CTAs, active states, accents
-backgroundColor       = "#F5F0E8"          # Warm paper — main page surface
-secondaryBackgroundColor = "#EDE8DE"       # Slightly deeper paper — sidebar, cards
-textColor             = "#1B2A4A"          # Deep navy — all body text
-font                  = "serif"            # Matches scholarly Crimson Pro feel
-baseFontSize          = 14
- 
- 
-# ──────────────────────────────────────────────
-# DARK THEME  (uncomment block below to activate)
-# ──────────────────────────────────────────────
-# [theme]
-# base                     = "dark"
-# primaryColor             = "#D4A843"       # Warmer gold for dark backgrounds
-# backgroundColor          = "#0F1C32"       # Near-black navy — main surface
-# secondaryBackgroundColor = "#1B2A4A"       # Mid navy — sidebar, cards
-# textColor                = "#E8EDF5"       # Pale blue-white — all body text
-# font                     = "serif"
- 
- 
-# ──────────────────────────────────────────────
-# SERVER / APP SETTINGS
-# ──────────────────────────────────────────────
-[server]
-# headless      = true
-# port          = 8501
- 
-[browser]
-# gatherUsageStats = false
+base = "light"
+primaryColor = "#0F766E"
+backgroundColor = "#F4F7FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172B4D"
+font = "sans-serif"
+headingFont = "sans-serif"
+baseFontSize = 16
+headingFontSizes = ["2.25rem", "1.5rem", "1.15rem", "1rem", "1rem", "1rem"]
+headingFontWeights = [650, 600, 600, 600, 600, 600]
+metricValueFontSize = "1.65rem"
+baseRadius = "0.75rem"
+buttonRadius = "0.5rem"
+borderColor = "#D6DEE8"
+dataframeBorderColor = "#D6DEE8"
+dataframeHeaderBackgroundColor = "#EAF0F5"
+showWidgetBorder = true
+showSidebarBorder = true
+linkColor = "#0F766E"
+
+[theme.sidebar]
+backgroundColor = "#EAF0F5"
+secondaryBackgroundColor = "#FFFFFF"

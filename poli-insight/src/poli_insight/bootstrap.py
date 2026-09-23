@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import cast
 
@@ -45,6 +46,7 @@ from poli_insight.application.use_cases.manage_invitations import (
     ReplaceInvitation,
     RevokeInvitation,
 )
+from poli_insight.application.use_cases.manual_reporting import ManualReporting
 from poli_insight.application.use_cases.open_session import OpenSession
 from poli_insight.application.use_cases.participant_access import (
     CaptureParticipantConsent,
@@ -209,6 +211,7 @@ class ApplicationContainer:
     participation: ParticipationUseCases
     operations: OperationalUseCases
     participant_imports: ParticipantImportUseCases
+    reporting: ManualReporting
 
 
 def create_container(
@@ -252,6 +255,7 @@ def create_container(
     )
 
     return ApplicationContainer(
+        reporting=ManualReporting(unit_of_work_factory, admin_role=os.getenv("POLI_INSIGHT_ADMIN_ROLE", "admin")),
         settings=resolved_settings,
         page_queries=SqlAlchemyPageQueries(
             session_factory,

@@ -11,9 +11,6 @@ import streamlit as st
 from streamlit_extras.card_selector import (  # type: ignore[import-untyped]
     card_selector,
 )
-from streamlit_extras.metric_cards import (  # type: ignore[import-untyped]
-    style_metric_cards,
-)
 from streamlit_extras.pagination import pagination  # type: ignore[import-untyped]
 from streamlit_extras.steps import steps  # type: ignore[import-untyped]
 
@@ -54,9 +51,10 @@ from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
     admin_surface,
     format_datetime,
-    render_admin_surface_styles,
+    metric_row,
     render_empty_state,
     render_page_header,
+    render_section_heading,
 )
 from poli_insight.presentation.streamlit.components.session_search import (
     render_session_search,
@@ -113,7 +111,6 @@ _MATRIX_LEVEL_PRESENTATION: dict[
 
 
 def render(context: PageContext) -> None:
-    render_admin_surface_styles()
     render_page_header(
         PageHeader(
             eyebrow="Administration",
@@ -149,7 +146,7 @@ def _render_processing_queue(
 ) -> None:
     prefix = f"processing:{mode.value}"
     with admin_surface(key=f"{mode.value}_filters", variant="filter"):
-        st.markdown("#### Search and filter sessions")
+        render_section_heading("Search and filter sessions", level=3)
         st.caption(
             "Narrow the processing queue by lifecycle, scenario, date, or "
             "processing state."
@@ -199,9 +196,9 @@ def _render_processing_queue(
             if mode == ProcessingQueueMode.PROCESSED:
                 render_empty_state(
                     "Final packages are not available yet",
-                    "A persisted end-to-end final-package marker does not exist. "
-                    "Successful weighting artifacts remain In Progress and are not "
-                    "misclassified as processed sessions.",
+                    "No successful final package matches these filters. Sessions "
+                    "with weighting or ranking work remain in progress until "
+                    "a package succeeds.",
                     icon=":material/package_2:",
                 )
                 return
@@ -211,20 +208,19 @@ def _render_processing_queue(
                 icon=":material/manufacturing:",
             )
             return
-        metrics = st.columns(3)
-        metrics[0].metric("Matching sessions", result.total)
+        metrics = metric_row(
+            3, key=f"processing:_render_processing_queue:0:{mode.value}"
+        )
+        metrics[0].metric("Matching sessions", result.total, border=True)
         metrics[1].metric(
             "Successful history on page",
             sum(item.successful_run_count > 0 for item in result.items),
+            border=True,
         )
         metrics[2].metric(
             "Blocked on page",
             sum(bool(item.blockers) for item in result.items),
-        )
-        style_metric_cards(
-            border_left_color=st.get_option("theme.primaryColor") or "#C4932A",
-            border_radius_px=8,
-            box_shadow=False,
+            border=True,
         )
         first_result = ((result.page - 1) * result.page_size) + 1
         last_result = first_result + len(result.items) - 1
@@ -259,7 +255,7 @@ def _render_processing_session_card(
     ):
         heading = st.columns((0.72, 0.28), vertical_alignment="center")
         with heading[0]:
-            st.markdown(f"#### {item.title}")
+            render_section_heading(f"{item.title}", level=3)
             st.caption(
                 f"{item.public_slug} · {item.scenario_title} {item.scenario_version}"
             )
@@ -427,7 +423,7 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
     )
     st.session_state["processing:viewed_stage"] = selected_index
     with admin_surface(key=f"workflow_{session_id}", variant="workflow_navigation"):
-        st.markdown("### Session Processing Steps")
+        render_section_heading("Session Processing Steps", level=2)
         navigation = st.columns((0.25, 0.5, 0.25))
         if navigation[0].button(
             "Exit to queues",
@@ -707,7 +703,7 @@ def _render_processing_details(
 ) -> None:
     session_id = detail.summary.session_id
     with admin_surface(key=f"configuration_{session_id}", variant="configuration"):
-        st.markdown("### Session Processing Details")
+        render_section_heading("Session Processing Details", level=2)
         with st.expander("Configuration reference", expanded=False):
             configuration = detail.configuration
             identity = {
@@ -762,12 +758,12 @@ def _render_processing_details(
                         }
                     )
             if algorithms:
-                st.markdown("##### Version-pinned algorithms")
+                render_section_heading("Version-pinned algorithms", level=4)
                 st.dataframe(algorithms, hide_index=True, width="stretch")
             groups = tuple(getattr(detail, "group_progress", ()))
             if groups:
                 total_units = sum(group.allocation_units for group in groups)
-                st.markdown("##### Stakeholder groups and voting power")
+                render_section_heading("Stakeholder groups and voting power", level=4)
                 st.dataframe(
                     [
                         {
@@ -786,7 +782,7 @@ def _render_processing_details(
                 )
             if runs:
                 latest = runs[0]
-                st.markdown("##### Latest immutable identifiers")
+                render_section_heading("Latest immutable identifiers", level=4)
                 st.json(
                     {
                         "processing_run_id": latest.processing_run_id,
@@ -847,19 +843,23 @@ def _render_session_validation_stage(
     detail: Any,
     overview: SessionValidationOverview,
 ) -> None:
-    st.markdown("### Session Validation")
+    render_section_heading("Session Validation", level=2)
     st.caption("Live readiness preflight; no approval record is created.")
-    metrics = st.columns(4)
-    metrics[0].metric("Session status", overview.session_status.value.title())
+    metrics = metric_row(4, key="processing:_render_session_validation_stage:0")
+    metrics[0].metric(
+        "Session status", overview.session_status.value.title(), border=True
+    )
     metrics[1].metric(
         "Configuration",
         "Active" if overview.has_active_configuration else "Missing",
+        border=True,
     )
     metrics[2].metric(
         "Scenario",
         detail.summary.scenario_status.value.replace("_", " ").title(),
+        border=True,
     )
-    metrics[3].metric("Current roster", overview.effective_submitted_count)
+    metrics[3].metric("Current roster", overview.effective_submitted_count, border=True)
     if overview.current_roster_hash is not None:
         st.caption("Current deterministic roster hash")
         st.code(overview.current_roster_hash, language=None)
@@ -903,7 +903,7 @@ def _render_submission_validation_stage(
     read_only: bool,
 ) -> None:
     session_id = detail.summary.session_id
-    st.markdown("### Submission Validation")
+    render_section_heading("Submission Validation", level=2)
     level_cards = (
         (
             "Individual evidence",
@@ -936,7 +936,7 @@ def _render_submission_validation_stage(
             key=f"validation_individual_{session_id}",
             variant="individual",
         ):
-            st.markdown("#### Individual participant evidence")
+            render_section_heading("Individual participant evidence", level=3)
             st.caption(
                 "Every record here belongs to one participant. A stakeholder-group "
                 "filter changes which individuals are visible; it does not aggregate them."
@@ -975,7 +975,7 @@ def _render_group_submission_summary(
         key=f"submission_groups_{session_id}",
         variant="group_aggregate",
     ):
-        st.markdown("#### Stakeholder-group summaries")
+        render_section_heading("Stakeholder-group summaries", level=3)
         st.caption(
             "Counts are aggregated within each stakeholder group. Enrolled "
             "participants are the available baseline, not a configured target."
@@ -1026,21 +1026,26 @@ def _render_session_submission_summary(
         key=f"submission_session_{session_id}",
         variant="session_aggregate",
     ):
-        st.markdown("#### Session aggregate")
+        render_section_heading("Session aggregate", level=3)
         st.caption(
             "These totals summarize the current roster and all submission attempts. "
             "They do not expose individual validation identities."
         )
         total = submission_context.total if submission_context is not None else None
-        metrics = st.columns(4)
+        metrics = metric_row(4, key="processing:_render_session_submission_summary:0")
         metrics[0].metric(
             "Enrolled (available baseline)",
             total("enrolled_count") if total else 0,
+            border=True,
         )
-        metrics[1].metric("Current submitted", overview.effective_submitted_count)
-        metrics[2].metric("Valid", overview.valid_count)
+        metrics[1].metric(
+            "Current submitted", overview.effective_submitted_count, border=True
+        )
+        metrics[2].metric("Valid", overview.valid_count, border=True)
         metrics[3].metric(
-            "Invalid / errors", overview.invalid_count + overview.error_count
+            "Invalid / errors",
+            overview.invalid_count + overview.error_count,
+            border=True,
         )
         validation_frame = pd.DataFrame(
             {
@@ -1068,7 +1073,7 @@ def _render_session_submission_summary(
                 }
             }
         )
-        st.markdown("##### Attempt lifecycle")
+        render_section_heading("Attempt lifecycle", level=4)
         if int(attempts["Attempt count"].sum()) == 0:
             st.info("No submission attempts are available to chart.")
         else:
@@ -1144,7 +1149,7 @@ def _render_validation_queue(
     *,
     read_only: bool,
 ) -> None:
-    st.markdown("#### Current validation results")
+    render_section_heading("Current validation results", level=3)
     prefix = f"processing:validation_queue:{detail.summary.session_id}"
     page = max(1, int(st.session_state.get(f"{prefix}:page", 1)))
     try:
@@ -1321,7 +1326,7 @@ def _render_weight_generation_stage(
     *,
     read_only: bool,
 ) -> None:
-    st.markdown("### Weight Generation")
+    render_section_heading("Weight Generation", level=2)
     if not runs:
         st.warning("Complete submission validation before generating weights.")
         return
@@ -1445,7 +1450,7 @@ def _render_weight_generation_stage(
             None,
         )
         if log_artifact is not None:
-            st.markdown("##### Persisted execution log")
+            render_section_heading("Persisted execution log", level=4)
             st.json(dict(log_artifact.content_json))
         else:
             st.caption(
@@ -1471,7 +1476,7 @@ def _render_matrix_browser(
     key: str,
     group_filter: bool = False,
 ) -> None:
-    st.markdown(f"#### {title}")
+    render_section_heading(f"{title}", level=3)
     if not matrices:
         st.info("No matrices are available at this stage.")
         return
@@ -1501,7 +1506,7 @@ def _render_matrix_browser(
         key=f"{key}_{level}",
         variant=surface_variant,
     ):
-        st.markdown(f"##### {level_title}")
+        render_section_heading(f"{level_title}", level=4)
         st.caption(level_description)
         _render_matrix_level(
             visible,
@@ -1668,39 +1673,42 @@ def _render_matrix_level(
 
 
 def _render_matrix_metadata(selected: ProcessingMatrixView) -> None:
-    details = st.columns(5)
+    details = metric_row(
+        5,
+        key=f"processing:_render_matrix_metadata:0:{selected.level}:{selected.matrix_hash}",
+    )
     if selected.level == "participant":
-        details[0].metric("Participant", selected.participant_label or "—")
+        details[0].metric("Participant", selected.participant_label or "—", border=True)
         details[1].metric(
-            "Stakeholder group",
-            selected.stakeholder_group_label or "—",
+            "Stakeholder group", selected.stakeholder_group_label or "—", border=True
         )
-        details[2].metric("Criteria", len(selected.criterion_ids))
-        details[3].metric("Validation", selected.validation_id or "—")
+        details[2].metric("Criteria", len(selected.criterion_ids), border=True)
+        details[3].metric("Validation", selected.validation_id or "—", border=True)
     elif selected.level == "stakeholder_group":
         details[0].metric(
-            "Stakeholder group",
-            selected.stakeholder_group_label or "—",
+            "Stakeholder group", selected.stakeholder_group_label or "—", border=True
         )
         details[1].metric(
             "Contributors",
             selected.participant_count
             if selected.participant_count is not None
             else "—",
+            border=True,
         )
-        details[2].metric("Voting power", selected.voting_power or "—")
-        details[3].metric("Criteria", len(selected.criterion_ids))
+        details[2].metric("Voting power", selected.voting_power or "—", border=True)
+        details[3].metric("Criteria", len(selected.criterion_ids), border=True)
     else:
-        details[0].metric("Level", "Session aggregate")
+        details[0].metric("Level", "Session aggregate", border=True)
         details[1].metric(
             "Contributors",
             selected.participant_count
             if selected.participant_count is not None
             else "—",
+            border=True,
         )
-        details[2].metric("Criteria", len(selected.criterion_ids))
-        details[3].metric("Voting power", selected.voting_power or "—")
-    details[4].metric("Matrix hash", selected.matrix_hash[:12] + "…")
+        details[2].metric("Criteria", len(selected.criterion_ids), border=True)
+        details[3].metric("Voting power", selected.voting_power or "—", border=True)
+    details[4].metric("Matrix hash", selected.matrix_hash[:12] + "…", border=True)
 
 
 def _render_ranking_stage(
@@ -1713,7 +1721,7 @@ def _render_ranking_stage(
     ranking_runs: tuple[Any, ...],
     read_only: bool,
 ) -> None:
-    st.markdown("### Create Ranking")
+    render_section_heading("Create Ranking", level=2)
     successful_weighting = tuple(
         run for run in runs if run.status == RunStatus.SUCCEEDED
     )
@@ -1849,7 +1857,7 @@ def _render_ranking_stage(
             )
 
     if submission_context is not None and submission_context.groups:
-        st.markdown("#### Group size and configured voting power")
+        render_section_heading("Group size and configured voting power", level=3)
         group_frame = pd.DataFrame(
             [
                 {
@@ -1889,7 +1897,7 @@ def _render_ranking_stage(
     if not ranking_runs:
         st.info("No immutable ranking history exists for this session.")
         return
-    st.markdown("#### Immutable ranking history")
+    render_section_heading("Immutable ranking history", level=3)
     selected_ranking_id = st.selectbox(
         "Ranking run",
         options=tuple(run.ranking_run_id for run in ranking_runs),
@@ -1958,7 +1966,7 @@ def _render_ranking_result_browser(
     *,
     key: str,
 ) -> None:
-    st.markdown("#### Ranking results")
+    render_section_heading("Ranking results", level=3)
     if not results:
         st.info("This successful run contains no readable ranking results.")
         return
@@ -1985,7 +1993,7 @@ def _render_ranking_result_browser(
     level, visible = partitions[selected_partition]
     _title, _description, _icon, surface_variant = _matrix_level_presentation(level)
     with admin_surface(key=f"{key}_{level}", variant=surface_variant):
-        st.markdown(f"##### {_ranking_level_title(level)}")
+        render_section_heading(f"{_ranking_level_title(level)}", level=4)
         st.caption(_ranking_level_description(level))
         selector_labels = {
             "participant": "Individual ranking",
@@ -2026,26 +2034,40 @@ def _render_ranking_result_browser(
             chart_values = pd.Series(dtype=float)
         if not chart_values.empty:
             st.bar_chart(chart_values, horizontal=True)
-        details = st.columns(4)
+        details = metric_row(
+            4, key=f"processing:_render_ranking_result_browser:0:{key}"
+        )
         if level == "participant":
-            details[0].metric("Participant", selected_result.participant_label or "—")
+            details[0].metric(
+                "Participant", selected_result.participant_label or "—", border=True
+            )
             details[1].metric(
                 "Stakeholder group",
                 selected_result.stakeholder_group_label or "—",
+                border=True,
             )
-            details[2].metric("Validation", selected_result.validation_id or "—")
+            details[2].metric(
+                "Validation", selected_result.validation_id or "—", border=True
+            )
         elif level == "stakeholder_group":
             details[0].metric(
                 "Stakeholder group",
                 selected_result.stakeholder_group_label or "—",
+                border=True,
             )
-            details[1].metric("Level", "Group aggregate")
-            details[2].metric("Alternatives", len(selected_result.alternatives))
+            details[1].metric("Level", "Group aggregate", border=True)
+            details[2].metric(
+                "Alternatives", len(selected_result.alternatives), border=True
+            )
         else:
-            details[0].metric("Level", "Session aggregate")
-            details[1].metric("Alternatives", len(selected_result.alternatives))
-            details[2].metric("Metric", selected_result.metric_label)
-        details[3].metric("Result hash", selected_result.result_hash[:12] + "…")
+            details[0].metric("Level", "Session aggregate", border=True)
+            details[1].metric(
+                "Alternatives", len(selected_result.alternatives), border=True
+            )
+            details[2].metric("Metric", selected_result.metric_label, border=True)
+        details[3].metric(
+            "Result hash", selected_result.result_hash[:12] + "…", border=True
+        )
         safe_payload: dict[str, object] = {
             "level": level,
             "metric_label": selected_result.metric_label,

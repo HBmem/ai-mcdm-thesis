@@ -19,6 +19,23 @@ from poli_insight.domain.enum import (
 JsonObject = Mapping[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class ResultPackageOverview:
+    """Lightweight UI projection, never a substitute for validated package evidence."""
+
+    package_run_id: str
+    session_id: str
+    run_number: int
+    completed_at: datetime
+    output_hash: str
+    source_roster_hash: str
+    configuration_version_id: str
+    source_processing_run_id: str
+    source_ranking_run_id: str
+    source_analysis_run_ids: tuple[str, ...]
+    artifacts: tuple[ResultPackageArtifact, ...] = ()
+
+
 class ResultPackageRuleViolation(ValueError):
     pass
 

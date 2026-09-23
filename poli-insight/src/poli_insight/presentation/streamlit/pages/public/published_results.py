@@ -1,4 +1,4 @@
-"""Private participant result projection and future public-release catalog."""
+"""Reviewed public reports and authorized private participant results."""
 
 from __future__ import annotations
 
@@ -12,12 +12,17 @@ from poli_insight.application.use_cases.participant_result_release import (
 from poli_insight.application.use_cases.result_package_exports import (
     participant_report_html,
 )
+from poli_insight.domain.reporting import ReportingError
 from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
-    render_capability_notice,
     render_page_header,
+    surface,
+)
+from poli_insight.presentation.streamlit.components.report_view import (
+    render_shared_report,
 )
 from poli_insight.presentation.streamlit.context import PageContext
+from poli_insight.presentation.streamlit.urls import public_report_url
 
 
 def render(context: PageContext) -> None:
@@ -25,21 +30,61 @@ def render(context: PageContext) -> None:
     if access_token:
         _render_private_result(context, access_token)
         return
+    report_id = _query_value("report")
+    if report_id:
+        render_page_header(
+            PageHeader(
+                eyebrow="Reviewed release",
+                title="Published Report",
+                description="A moderator-approved report from frozen session evidence.",
+            )
+        )
+        try:
+            report = context.container.reporting.public_report(report_id)
+        except ReportingError:
+            st.warning(
+                "This public report is unavailable. It may have been withdrawn, replaced, or become stale."
+            )
+            return
+        render_shared_report(report, key=f"public:{report_id}")
+        return
     render_page_header(
         PageHeader(
             eyebrow="Reviewed releases",
             title="Published Results",
             description=(
-                "General public publication is not enabled yet. Participant-specific "
-                "results are available only through an authorized private link."
+                "Browse moderator-approved session reports. Participant-specific "
+                "results remain available through authorized private links."
             ),
         )
     )
-    render_capability_notice(
-        "Public publication catalog",
-        "AI-assisted reports, editorial review, and general audience releases are "
-        "future functionality. Packaging a bundle does not publish it.",
+    search = st.text_input("Search published reports", key="public:reports:search")
+    page = int(
+        st.number_input(
+            "Catalog page",
+            min_value=1,
+            value=1,
+            step=1,
+            key=f"public:reports:page:{search}",
+        )
     )
+    items, total = context.container.reporting.public_catalog(search, page=page)
+    st.caption(f"{total} published reports · Page {page}")
+    if not items:
+        st.info("No published reports match this page and search.")
+    for item in items:
+        with surface(key=f"public:release:{item['release_id']}", variant="card"):
+            st.subheader(item["title"])
+            st.caption(
+                f"Revision {item['revision']} · Released {item['released_at'].isoformat()}"
+            )
+            st.link_button(
+                "Read report",
+                public_report_url(
+                    context.container.settings.public_base_url,
+                    release_id=item["release_id"],
+                ),
+            )
 
 
 def _render_private_result(context: PageContext, access_token: str) -> None:
@@ -111,17 +156,34 @@ def _render_private_result(context: PageContext, access_token: str) -> None:
         result=result,
         aggregate_sections=released.aggregate_sections,
     )
-    st.download_button(
-        "Download my readable report",
-        data=report,
-        file_name=f"participant-results-release-{released.release_version}.html",
-        mime="text/html",
-        icon=":material/download:",
-    )
+    with surface(key="results:download", variant="card"):
+        st.download_button(
+            "Download my readable report",
+            data=report,
+            file_name=f"participant-results-release-{released.release_version}.html",
+            mime="text/html",
+            icon=":material/download:",
+        )
     st.caption(
         "The complete identity-linked bundle and identity map are not available from "
         "participant access."
     )
+    reporting = getattr(context.container, "reporting", None)
+    if reporting is not None:
+        st.divider()
+        st.subheader("Shared session report")
+        try:
+            report = reporting.participant_report(access_token)
+            if report is None:
+                st.info(
+                    "A shared session report has not been released to participants."
+                )
+            else:
+                render_shared_report(
+                    report, key=f"participant:shared:{report.release_id}"
+                )
+        except ReportingError as error:
+            st.info(str(error))
 
 
 def _section(label: str, value: object, *, expanded: bool = False) -> None:

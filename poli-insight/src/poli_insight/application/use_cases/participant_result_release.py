@@ -93,100 +93,105 @@ class ReleaseParticipantResults:
     def execute(
         self, command: ReleaseParticipantResultsCommand
     ) -> ParticipantResultRelease:
-        now = self._clock()
         with self._unit_of_work_factory() as unit_of_work:
-            session = unit_of_work.session.get(command.session_id)
-            package = unit_of_work.result_packages.get(command.package_run_id)
-            if (
-                session is None
-                or package is None
-                or package.session_id != command.session_id
-            ):
-                raise ParticipantResultReleaseError(
-                    "The selected package is unavailable."
-                )
-            if session.identity_policy.casefold() == "anonymous":
-                raise ParticipantResultReleaseError(
-                    "Anonymous sessions cannot release identity-linked results."
-                )
-            if session.status != SessionStatus.CLOSED:
-                raise ParticipantResultReleaseError(
-                    "Participant results may be released only from a closed session."
-                )
-            if (
-                package.status != RunStatus.SUCCEEDED
-                or BundleVariant.PUBLIC not in package.variants
-            ):
-                raise ParticipantResultReleaseError(
-                    "Select a successful identity-linked public package."
-                )
-            source = unit_of_work.processing_runs.get(package.source_processing_run_id)
-            if (
-                source is None
-                or _current_roster_hash(unit_of_work, source)
-                != package.source_roster_hash
-            ):
-                raise ParticipantResultReleaseError(
-                    "This package is stale. Re-run processing and package current results."
-                )
-            public_artifact = next(
-                (
-                    item
-                    for item in package.artifacts
-                    if item.artifact_type == PackageArtifactType.VARIANT_MANIFEST
-                    and item.variant == BundleVariant.PUBLIC
-                ),
-                None,
-            )
-            if public_artifact is None:
-                raise ParticipantResultReleaseError(
-                    "The public package manifest is missing."
-                )
-            previous = unit_of_work.participant_result_releases.get_active_for_session(
-                command.session_id, for_update=True
-            )
-            version_number = unit_of_work.participant_result_releases.next_version(
-                command.session_id
-            )
-            if previous is not None:
-                withdrawn = previous.withdraw(
-                    at=now,
-                    actor_id=command.actor_id,
-                    reason=f"Superseded by participant release {version_number}.",
-                )
-                unit_of_work.participant_result_releases.save(withdrawn)
-            release = ParticipantResultRelease(
-                release_id=self._id_factory(),
-                session_id=command.session_id,
-                package_run_id=package.package_run_id,
-                package_artifact_id=public_artifact.package_artifact_id,
-                version_number=version_number,
-                status=ParticipantReleaseStatus.ACTIVE,
-                released_at=now,
-                released_by=command.actor_id,
-            )
-            unit_of_work.participant_result_releases.add(release)
-            unit_of_work.audit_events.add(
-                operational_audit_event(
-                    event_id=self._id_factory(),
-                    occurred_at=now,
-                    session_id=command.session_id,
-                    actor_id=command.actor_id,
-                    actor_type=command.actor_type,
-                    action=AuditAction.PUBLISHED,
-                    entity_type="participant_result_release",
-                    entity_id=release.release_id,
-                    correlation_id=command.correlation_id,
-                    use_case="release_participant_results",
-                    after_json={
-                        "release_version": version_number,
-                        "package_run_id": package.package_run_id,
-                        "package_output_hash": package.output_hash,
-                    },
-                )
-            )
+            release = self.execute_in_unit_of_work(unit_of_work, command)
             unit_of_work.commit()
             return release
+
+    def execute_in_unit_of_work(self, unit_of_work, command):
+        """Compose participant and shared-report releases in one transaction."""
+        now = self._clock()
+        session = unit_of_work.session.get(command.session_id)
+        package = unit_of_work.result_packages.get(command.package_run_id)
+        if (
+            session is None
+            or package is None
+            or package.session_id != command.session_id
+        ):
+            raise ParticipantResultReleaseError(
+                "The selected package is unavailable."
+            )
+        if session.identity_policy.casefold() == "anonymous":
+            raise ParticipantResultReleaseError(
+                "Anonymous sessions cannot release identity-linked results."
+            )
+        if session.status != SessionStatus.CLOSED:
+            raise ParticipantResultReleaseError(
+                "Participant results may be released only from a closed session."
+            )
+        if (
+            package.status != RunStatus.SUCCEEDED
+            or BundleVariant.PUBLIC not in package.variants
+        ):
+            raise ParticipantResultReleaseError(
+                "Select a successful identity-linked public package."
+            )
+        source = unit_of_work.processing_runs.get(package.source_processing_run_id)
+        if (
+            source is None
+            or _current_roster_hash(unit_of_work, source)
+            != package.source_roster_hash
+        ):
+            raise ParticipantResultReleaseError(
+                "This package is stale. Re-run processing and package current results."
+            )
+        public_artifact = next(
+            (
+                item
+                for item in package.artifacts
+                if item.artifact_type == PackageArtifactType.VARIANT_MANIFEST
+                and item.variant == BundleVariant.PUBLIC
+            ),
+            None,
+        )
+        if public_artifact is None:
+            raise ParticipantResultReleaseError(
+                "The public package manifest is missing."
+            )
+        version_number = unit_of_work.participant_result_releases.next_version(
+            command.session_id
+        )
+        previous = unit_of_work.participant_result_releases.get_active_for_session(
+            command.session_id, for_update=True
+        )
+        if previous is not None:
+            withdrawn = previous.withdraw(
+                at=now,
+                actor_id=command.actor_id,
+                reason=f"Superseded by participant release {version_number}.",
+            )
+            unit_of_work.participant_result_releases.save(withdrawn)
+        release = ParticipantResultRelease(
+            release_id=self._id_factory(),
+            session_id=command.session_id,
+            package_run_id=package.package_run_id,
+            package_artifact_id=public_artifact.package_artifact_id,
+            version_number=version_number,
+            status=ParticipantReleaseStatus.ACTIVE,
+            released_at=now,
+            released_by=command.actor_id,
+        )
+        unit_of_work.participant_result_releases.add(release)
+        unit_of_work.audit_events.add(
+            operational_audit_event(
+                event_id=self._id_factory(),
+                occurred_at=now,
+                session_id=command.session_id,
+                actor_id=command.actor_id,
+                actor_type=command.actor_type,
+                action=AuditAction.PUBLISHED,
+                entity_type="participant_result_release",
+                entity_id=release.release_id,
+                correlation_id=command.correlation_id,
+                use_case="release_participant_results",
+                after_json={
+                    "release_version": version_number,
+                    "package_run_id": package.package_run_id,
+                    "package_output_hash": package.output_hash,
+                },
+            )
+        )
+        return release
 
 
 class WithdrawParticipantResults:

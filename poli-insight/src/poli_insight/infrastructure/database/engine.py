@@ -24,6 +24,7 @@ from poli_insight.infrastructure.database.models import (
     participation as participation_models,
 )
 from poli_insight.infrastructure.database.models import ranking as ranking_models
+from poli_insight.infrastructure.database.models import reporting as reporting_models
 from poli_insight.infrastructure.database.models import (
     result_package as result_package_models,
 )
@@ -40,6 +41,7 @@ from poli_insight.infrastructure.database.models import (
 # startup. Keeping explicit aliases makes that side effect visible and prevents
 # formatters from treating the imports as accidentally unused.
 _REGISTERED_MODEL_MODULES = (
+    reporting_models,
     analysis_models,
     audit_models,
     operations_models,

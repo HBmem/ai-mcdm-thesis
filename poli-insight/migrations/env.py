@@ -13,6 +13,7 @@ from poli_insight.infrastructure.database.models import (
     processing,  # noqa: F401
     ranking,  # noqa: F401
     result_package,  # noqa: F401
+    reporting,  # noqa: F401
     scenario,  # noqa: F401
     session,  # noqa: F401
     submission,  # noqa: F401

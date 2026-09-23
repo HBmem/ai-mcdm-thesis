@@ -33,6 +33,9 @@ from poli_insight.infrastructure.database.repositories.processing_repository imp
 from poli_insight.infrastructure.database.repositories.ranking_repository import (
     SqlAlchemyRankingRunRepository,
 )
+from poli_insight.infrastructure.database.repositories.reporting_repository import (
+    SqlAlchemyReportingRepository,
+)
 from poli_insight.infrastructure.database.repositories.result_package_repository import (
     SqlAlchemyParticipantResultReleaseRepository,
     SqlAlchemyResultPackageRepository,
@@ -60,6 +63,7 @@ class SqlAlchemyUnitOfWork:
 
     def __enter__(self) -> Self:
         self.database_session = self._session_factory()
+        self.reporting = SqlAlchemyReportingRepository(self.database_session)
 
         self.algorithms = SqlAlchemyAlgorithmRepository(self.database_session)
         self.analysis_runs = SqlAlchemyAnalysisRunRepository(self.database_session)

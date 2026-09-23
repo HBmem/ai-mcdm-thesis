@@ -5,6 +5,13 @@ from __future__ import annotations
 from urllib.parse import urlencode
 
 
+def public_report_url(public_base_url: str, *, release_id: str) -> str:
+    base = public_base_url.rstrip('/')
+    if not base.endswith('/results'):
+        base += '/results'
+    return f'{base}?{urlencode({"report": release_id})}'
+
+
 def private_resume_url(
     public_base_url: str,
     *,

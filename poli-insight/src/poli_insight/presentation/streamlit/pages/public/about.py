@@ -5,6 +5,7 @@ import streamlit as st
 from poli_insight.presentation.streamlit.components.layout import (
     PageHeader,
     render_page_header,
+    surface,
 )
 from poli_insight.presentation.streamlit.context import PageContext
 
@@ -25,26 +26,25 @@ def render(context: PageContext) -> None:
 
     st.subheader("Two separate layers", anchor=False)
     deterministic, ai_assisted = st.columns(2)
-    with deterministic:
-        with st.container(border=True):
-            st.markdown("**Deterministic analysis**")
-            st.write(
-                "Configured MCDM algorithms calculate weights, aggregate "
-                "stakeholder input, rank alternatives, and test stability."
-            )
-    with ai_assisted:
-        with st.container(border=True):
-            st.markdown("**AI-assisted explanation**")
-            st.write(
-                "AI may draft explanations from validated outputs. It does not "
-                "replace calculations, and public text requires human review."
-            )
+    with deterministic, surface(key="about:render:1"):
+        st.markdown("**Deterministic analysis**")
+        st.write(
+            "Configured MCDM algorithms calculate weights, aggregate "
+            "stakeholder input, rank alternatives, and test stability."
+        )
+    with ai_assisted, surface(key="about:render:2"):
+        st.markdown("**AI-assisted explanation**")
+        st.write(
+            "AI may draft explanations from validated outputs. It does not "
+            "replace calculations, and public text requires human review."
+        )
 
     st.subheader("Research safeguards", anchor=False)
-    st.markdown(
-        "- Session configurations and submissions are versioned and hashed.\n"
-        "- Participant identity is kept separate from analytical records.\n"
-        "- Processing and publication are explicit, audited decisions.\n"
-        "- The system supports policy judgment; it is not an automated "
-        "decision-maker."
-    )
+    with surface(key="about:safeguards", variant="card"):
+        st.markdown(
+            "- Session configurations and submissions are versioned and hashed.\n"
+            "- Participant identity is kept separate from analytical records.\n"
+            "- Processing and publication are explicit, audited decisions.\n"
+            "- The system supports policy judgment; it is not an automated "
+            "decision-maker."
+        )

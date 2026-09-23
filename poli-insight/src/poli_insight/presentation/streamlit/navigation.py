@@ -16,6 +16,7 @@ from poli_insight.presentation.streamlit.auth import (
     Principal,
     create_authentication_adapter,
 )
+from poli_insight.presentation.streamlit.components.layout import reading_width
 from poli_insight.presentation.streamlit.context import PageContext
 from poli_insight.presentation.streamlit.errors import (
     page_error_boundary,
@@ -36,16 +37,13 @@ from poli_insight.presentation.streamlit.pages.public import (
     published_results,
 )
 
-
 PageRenderer = Callable[[PageContext], None]
 
 
 def run_navigation(container: ApplicationContainer) -> None:
     """Build navigation from verified identity and run the selected page."""
 
-    authentication, authorization, principal, auth_error = (
-        _authentication_state()
-    )
+    authentication, authorization, principal, auth_error = _authentication_state()
     routes: dict[str, Any] = {}
 
     home_page = st.Page(
@@ -193,7 +191,7 @@ def _admin_pages(
         (
             "reports",
             reports.render,
-            "AI reports & publication",
+            "Reports & Publication",
             ":material/rate_review:",
             "admin-reports",
             False,
@@ -235,19 +233,25 @@ def _bind_page(
         if admin_required:
             current_principal = authentication.current_principal()
             if not authorization.can_access_admin(current_principal):
-                render_access_denied(
-                    authenticated=current_principal.is_authenticated
-                )
+                render_access_denied(authenticated=current_principal.is_authenticated)
                 return
-        renderer(
-            PageContext(
-                container=container,
-                queries=container.page_queries,
-                principal=current_principal,
-                authentication=authentication,
-                routes=routes,
-            )
+        context = PageContext(
+            container=container,
+            queries=container.page_queries,
+            principal=current_principal,
+            authentication=authentication,
+            routes=routes,
         )
+        if renderer in (
+            participate.render,
+            about.render,
+            login.render,
+            published_results.render,
+        ):
+            with reading_width(renderer.__module__):
+                renderer(context)
+        else:
+            renderer(context)
 
     return bound_page
 
@@ -280,8 +284,7 @@ def _bind_login_page(
     return unavailable
 
 
-def _authentication_state(
-) -> tuple[
+def _authentication_state() -> tuple[
     AuthenticationAdapter,
     AuthorizationPolicy,
     Principal,
@@ -301,9 +304,7 @@ def _authentication_state(
         # Keep public routes available without ever downgrading to dev auth.
         safe_settings = AuthenticationSettings()
         authentication = create_authentication_adapter(safe_settings)
-        authorization = AuthorizationPolicy(
-            admin_role=safe_settings.admin_role
-        )
+        authorization = AuthorizationPolicy(admin_role=safe_settings.admin_role)
         return (
             authentication,
             authorization,
@@ -319,7 +320,9 @@ def _render_sidebar_account(
     auth_error: str | None,
 ) -> None:
     with st.sidebar:
-        st.caption("Poli Insight")
+        with st.container(key="pi_sidebar_brand"):
+            st.markdown("**:material/account_balance: Poli Insight**")
+            st.caption("Policy evaluation · Research workspace")
         if auth_error is not None:
             st.caption("Administrator authentication unavailable")
             return
