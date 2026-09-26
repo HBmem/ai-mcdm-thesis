@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from html import escape
+import json
 from typing import Any, Callable
 
 from poli_insight.domain.reporting import SharedReport
@@ -325,6 +326,28 @@ def _render_raw_value(value: Any) -> str:
         return '<span class="muted">Not recorded</span>'
     return escape(str(value))
 
+
+def _render_json_object(value: Any) -> str:
+    """Render evidence as a pretty-printed JSON object without third-party libraries.
+
+    Package evidence should already be JSON-compatible. The fallback to ``str`` is
+    defensive for legacy/custom evidence values such as Decimal or datetime and is
+    used only for the human-readable HTML projection; it does not mutate package
+    evidence or any stored hashes.
+    """
+    try:
+        payload = json.dumps(value, indent=2, ensure_ascii=False)
+    except TypeError:
+        payload = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+    return (
+        '<div class="json-wrap">'
+        '<pre class="json-object" aria-label="Raw evidence JSON"><code>'
+        + escape(payload)
+        + '</code></pre>'
+        '</div>'
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ReportLookups:
     alternatives: dict[str, str]
@@ -639,11 +662,15 @@ def _render_configuration(configuration: dict, lookups: ReportLookups) -> str:
         name = _first(row, "name", default=_group_label(group_id, lookups))
         count = _first(row, "included participant count", "included_participant_count", default=0)
         voting_power = _first(row, "configured voting power", "configured_voting_power")
+        effective_voting_power = _first(
+            row, "effective voting power", "effective_voting_power"
+        )
         group_table_rows.append(
             [
                 name,
                 _code(_first(row, "key"), css_class="short-code"),
                 _fmt_fraction_percent(voting_power, 1),
+                _fmt_fraction_percent(effective_voting_power, 1),
                 _fmt_number(_first(row, "configured allocation units", "configured_allocation_units"), 0),
                 _fmt_number(count, 0),
                 _fmt_bool(_first(row, "small group warning", "small_group_warning")),
@@ -659,7 +686,8 @@ def _render_configuration(configuration: dict, lookups: ReportLookups) -> str:
         [
             "Stakeholder group",
             "Key",
-            "Voting power",
+            "Configured voting power",
+            "Effective voting power",
             "Allocation units",
             "Included participants",
             "Small-group warning",
@@ -1034,17 +1062,49 @@ def _analysis_cases(result: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _case_metrics(case: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return the primary comparison metrics for any analysis case.
+
+    New participant-influence packages normalize the session effect to
+    ``result.metrics``. The ``session_metrics`` fallback keeps previously created
+    packages renderable without rebundling them.
+    """
     result = _mapping(_first(case, "result", default={}))
-    return _mapping(_first(result, "metrics", default={}))
+    metrics = _mapping(_first(result, "metrics", default={}))
+    if metrics:
+        return metrics
+    return _mapping(
+        _first(result, "session metrics", "session_metrics", default={})
+    )
+
+
+def _case_ranking(case: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return the primary reranking for any analysis case with legacy fallback."""
+    result = _mapping(_first(case, "result", default={}))
+    ranking = _sequence(_first(result, "ranking", default=[]))
+    if not ranking:
+        ranking = _sequence(
+            _first(result, "session ranking", "session_ranking", default=[])
+        )
+    return [_mapping(row) for row in ranking]
+
+
+def _winner_from_ranking(
+    ranking: Sequence[Mapping[str, Any]],
+    lookups: ReportLookups,
+) -> str:
+    if not ranking:
+        return "Not recorded"
+    winner = min(
+        ranking,
+        key=lambda row: _int(_first(row, "rank", default=10**9)) or 10**9,
+    )
+    return _alternative_label(
+        _first(winner, "alternative id", "alternative_id"), lookups
+    )
 
 
 def _case_winner(case: Mapping[str, Any], lookups: ReportLookups) -> str:
-    result = _mapping(_first(case, "result", default={}))
-    ranking = [_mapping(row) for row in _sequence(_first(result, "ranking", default=[]))]
-    if not ranking:
-        return "Not recorded"
-    winner = min(ranking, key=lambda row: _int(_first(row, "rank", default=10**9)) or 10**9)
-    return _alternative_label(_first(winner, "alternative id", "alternative_id"), lookups)
+    return _winner_from_ranking(_case_ranking(case), lookups)
 
 
 def _scope_label(case: Mapping[str, Any], lookups: ReportLookups) -> str:
@@ -1055,7 +1115,8 @@ def _scope_label(case: Mapping[str, Any], lookups: ReportLookups) -> str:
     if scope_type == "stakeholder_group":
         return _group_label(scope_id, lookups)
     if scope_type == "participant":
-        return "Participant" if scope_id in (None, "", "Not recorded") else f"Participant {scope_id}"
+        # Shared audit reports intentionally avoid rendering participant identifiers.
+        return "Participant"
     return _humanize(scope_type) if scope_id in (None, "") else f"{_humanize(scope_type)}: {scope_id}"
 
 
@@ -1069,7 +1130,8 @@ def _subject_label(case: Mapping[str, Any], lookups: ReportLookups) -> str:
     if subject_type == "stakeholder_group":
         return _group_label(subject_id, lookups)
     if subject_type == "participant":
-        return "Participant" if subject_id in (None, "", "Not recorded") else f"Participant {subject_id}"
+        # The case sequence identifies the audit record without exposing a participant ID.
+        return "Participant"
     if subject_id in (None, "", "Not recorded"):
         return _humanize(subject_type)
     return str(subject_id)
@@ -1093,6 +1155,12 @@ def _render_analysis_overview(results: Sequence[Mapping[str, Any]]) -> str:
     rows = []
     for result in results:
         summary = _analysis_summary_metrics(result)
+        warning_counts = _mapping(
+            _first(result, "warning counts", "warning_counts", default={})
+        )
+        warning_total = sum(
+            _int(value) or 0 for value in warning_counts.values()
+        )
         rows.append(
             [
                 _humanize(_first(result, "method")),
@@ -1103,6 +1171,7 @@ def _render_analysis_overview(results: Sequence[Mapping[str, Any]]) -> str:
                 _fmt_number(_first(summary, "strict reversal count", "strict_reversal_count"), 0),
                 _fmt_number(_first(summary, "top set change count", "top_set_change_count"), 0),
                 _fmt_bool(_first(summary, "instability detected", "instability_detected")),
+                _fmt_number(warning_total, 0),
                 _code(_first(result, "analysis run id", "analysis_run_id")),
             ]
         )
@@ -1116,6 +1185,7 @@ def _render_analysis_overview(results: Sequence[Mapping[str, Any]]) -> str:
             "Strict reversals",
             "Top-set changes",
             "Instability detected",
+            "Warnings",
             "Run ID",
         ],
         rows,
@@ -1336,6 +1406,511 @@ def _render_influence_analysis(
     )
 
 
+def _participant_group_effect(
+    case: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]], Mapping[str, Any]]:
+    """Return stakeholder-group metrics, ranking and weighting diagnostics.
+
+    Supports both the normalized package projection and legacy participant
+    influence cases that stored ``group_*`` fields directly on result.
+    """
+    result = _mapping(_first(case, "result", default={}))
+    effect = _mapping(
+        _first(
+            result,
+            "stakeholder group effect",
+            "stakeholder_group_effect",
+            default={},
+        )
+    )
+
+    metrics = _mapping(_first(effect, "metrics", default={}))
+    if not metrics:
+        metrics = _mapping(
+            _first(result, "group metrics", "group_metrics", default={})
+        )
+
+    ranking = _sequence(_first(effect, "ranking", default=[]))
+    if not ranking:
+        ranking = _sequence(
+            _first(result, "group ranking", "group_ranking", default=[])
+        )
+
+    diagnostics = _mapping(
+        _first(
+            effect,
+            "weighting diagnostics",
+            "weighting_diagnostics",
+            default={},
+        )
+    )
+    if not diagnostics:
+        diagnostics = _mapping(
+            _first(
+                result,
+                "group weighting diagnostics",
+                "group_weighting_diagnostics",
+                default={},
+            )
+        )
+
+    return metrics, [_mapping(row) for row in ranking], diagnostics
+
+
+def _participant_session_weighting_diagnostics(
+    case: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Return session weighting diagnostics from normalized or legacy cases."""
+    result = _mapping(_first(case, "result", default={}))
+    diagnostics = _mapping(
+        _first(
+            result,
+            "weighting diagnostics",
+            "weighting_diagnostics",
+            default={},
+        )
+    )
+    if diagnostics:
+        return diagnostics
+    return _mapping(
+        _first(
+            result,
+            "session weighting diagnostics",
+            "session_weighting_diagnostics",
+            default={},
+        )
+    )
+
+
+def _render_ranking_rows(
+    rows: Sequence[Mapping[str, Any]],
+    lookups: ReportLookups,
+) -> str:
+    """Render a compact deterministic ranking table used by analysis appendices."""
+    if not rows:
+        return '<p class="empty-state">No ranking recorded.</p>'
+    ordered = sorted(
+        rows,
+        key=lambda row: _int(_first(row, "rank", default=10**9)) or 10**9,
+    )
+    return render_table(
+        ["Rank", "Alternative", "Preference value"],
+        [
+            [
+                _first(row, "rank"),
+                _alternative_label(
+                    _first(row, "alternative id", "alternative_id"), lookups
+                ),
+                _fmt_decimal(
+                    _first(row, "preference value", "preference_value"), 6
+                ),
+            ]
+            for row in ordered
+        ],
+    )
+
+
+def _participant_identifiers_included(result: Mapping[str, Any]) -> bool | None:
+    """Return whether participant identifiers are included in the packaged analysis."""
+    summary = _analysis_summary_metrics(result)
+    distribution = _mapping(
+        _first(summary, "effect distribution", "effect_distribution", default={})
+    )
+
+    for source in (result, _mapping(_first(result, "summary", default={})), summary, distribution):
+        value = _first(
+            source,
+            "participant identifiers included",
+            "participant_identifiers_included",
+        )
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return value
+        normalized = str(value).strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+    return None
+
+
+def _participant_case_label(case: Mapping[str, Any], fallback_index: int) -> str:
+    """Create a stable privacy-safe label for a participant influence case."""
+    sequence = _first(case, "sequence")
+    if sequence not in (None, ""):
+        return f"Participant case {sequence}"
+    return f"Participant case {fallback_index}"
+
+
+def _participant_case_group(case: Mapping[str, Any], lookups: ReportLookups) -> str:
+    """Resolve a participant case's stakeholder group when the package records it."""
+    inputs = _mapping(_first(case, "input", default={}))
+    result = _mapping(_first(case, "result", default={}))
+
+    group_id = _first(
+        case,
+        "stakeholder group id",
+        "stakeholder_group_id",
+        default=_first(
+            inputs,
+            "stakeholder group id",
+            "stakeholder_group_id",
+            "group id",
+            "group_id",
+            default=_first(
+                result,
+                "stakeholder group id",
+                "stakeholder_group_id",
+                "group id",
+                "group_id",
+            ),
+        ),
+    )
+    if group_id in (None, "", "Not recorded"):
+        group_name = _first(
+            inputs,
+            "stakeholder group",
+            "stakeholder_group",
+            "group name",
+            "group_name",
+            default=_first(
+                result,
+                "stakeholder group",
+                "stakeholder_group",
+                "group name",
+                "group_name",
+            ),
+        )
+        return str(group_name) if group_name not in (None, "") else "Not recorded"
+    return _group_label(group_id, lookups)
+
+
+def _participant_displacement_counts(
+    result: Mapping[str, Any],
+    cases: Sequence[Mapping[str, Any]],
+) -> dict[int, int]:
+    """Return packaged or deterministically reconstructed rank-displacement counts."""
+    summary = _analysis_summary_metrics(result)
+    distribution = _mapping(
+        _first(summary, "effect distribution", "effect_distribution", default={})
+    )
+    packaged = _mapping(
+        _first(
+            distribution,
+            "session maximum rank displacement counts",
+            "session_maximum_rank_displacement_counts",
+            default={},
+        )
+    )
+
+    counts: dict[int, int] = {}
+    for displacement, count in packaged.items():
+        displacement_num = _int(displacement)
+        count_num = _int(count)
+        if displacement_num is not None and count_num is not None:
+            counts[displacement_num] = counts.get(displacement_num, 0) + count_num
+
+    if counts:
+        return counts
+
+    # Older packages may omit the distribution while still carrying evaluable case metrics.
+    for case in cases:
+        metrics = _case_metrics(case)
+        displacement = _int(
+            _first(metrics, "maximum rank displacement", "maximum_rank_displacement")
+        )
+        if displacement is not None:
+            counts[displacement] = counts.get(displacement, 0) + 1
+    return counts
+
+
+def _redact_participant_identifiers(value: Any) -> Any:
+    """Remove participant identifiers from recursive appendix data while preserving structure."""
+    if isinstance(value, Mapping):
+        cleaned: dict[Any, Any] = {}
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("_", " ")
+            is_identifier_flag = normalized == "participant identifiers included"
+            is_participant_identifier = (
+                "participant" in normalized
+                and (" id" in normalized or normalized.endswith("id") or "identifier" in normalized)
+                and not is_identifier_flag
+            )
+            cleaned[key] = (
+                "Omitted from shared audit report"
+                if is_participant_identifier
+                else _redact_participant_identifiers(item)
+            )
+        return cleaned
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_redact_participant_identifiers(item) for item in value]
+    return value
+
+
+def _render_participant_influence_analysis(
+    result: Mapping[str, Any],
+    lookups: ReportLookups,
+) -> str:
+    """Render leave-one-participant-out influence as a first-class audit subsection."""
+    summary = _analysis_summary_metrics(result)
+    cases = _analysis_cases(result)
+    identifiers_included = _participant_identifiers_included(result)
+
+    case_count = _int(_first(summary, "case count", "case_count"))
+    if case_count is None:
+        case_count = len(cases)
+
+    evaluated_count = _int(_first(summary, "evaluated count", "evaluated_count"))
+    if evaluated_count is None:
+        evaluated_count = sum(
+            1
+            for case in cases
+            if str(_first(case, "status", default="")).lower() == "evaluated"
+            or bool(_case_metrics(case))
+        )
+
+    not_evaluable_count = _int(
+        _first(summary, "not evaluable count", "not_evaluable_count")
+    )
+    if not_evaluable_count is None:
+        not_evaluable_count = max(case_count - evaluated_count, 0)
+
+    max_displacement = _int(
+        _first(summary, "maximum rank displacement", "maximum_rank_displacement")
+    )
+    strict_reversals = _int(
+        _first(summary, "strict reversal count", "strict_reversal_count")
+    )
+    top_set_changes = _int(
+        _first(summary, "top set change count", "top_set_change_count")
+    )
+
+    group_displacements: list[int] = []
+    group_strict_reversals = 0
+    group_top_set_changes = 0
+    warning_case_count = 0
+    for case in cases:
+        group_metrics, _, _ = _participant_group_effect(case)
+        displacement = _int(
+            _first(
+                group_metrics,
+                "maximum rank displacement",
+                "maximum_rank_displacement",
+            )
+        )
+        if displacement is not None:
+            group_displacements.append(displacement)
+        group_strict_reversals += (
+            _int(_first(group_metrics, "strict reversals", "strict_reversals")) or 0
+        )
+        group_top_set_changes += int(
+            bool(_first(group_metrics, "top set changed", "top_set_changed", default=False))
+        )
+        if _sequence(_first(case, "warnings", default=[])):
+            warning_case_count += 1
+
+    max_group_displacement = max(group_displacements) if group_displacements else None
+
+    cards = _metric_cards(
+        [
+            ("Participant cases", _fmt_number(case_count, 0), "Leave-one-participant-out cases"),
+            ("Evaluated", _fmt_number(evaluated_count, 0), None),
+            ("Not evaluable", _fmt_number(not_evaluable_count, 0), None),
+            (
+                "Maximum rank displacement",
+                _fmt_number(max_displacement, 0),
+                "Largest recorded session-rank movement",
+            ),
+            ("Strict reversals", _fmt_number(strict_reversals, 0), None),
+            ("Top-set changes", _fmt_number(top_set_changes, 0), None),
+            (
+                "Maximum group displacement",
+                _fmt_number(max_group_displacement, 0),
+                "Derived from packaged participant cases",
+            ),
+            (
+                "Group strict reversals",
+                _fmt_number(group_strict_reversals, 0),
+                "Derived from stakeholder-group effects",
+            ),
+            (
+                "Group top-set changes",
+                _fmt_number(group_top_set_changes, 0),
+                "Derived from stakeholder-group effects",
+            ),
+            (
+                "Cases with warnings",
+                _fmt_number(warning_case_count, 0),
+                "Case-level warning count",
+            ),
+        ]
+    )
+
+    availability = _definition_grid(
+        [
+            ("Method", _humanize(_first(summary, "method", default=_first(result, "method")))),
+            ("Analysis run ID", _code(_first(result, "analysis run id", "analysis_run_id"))),
+            (
+                "Participant identifiers included",
+                _fmt_bool(identifiers_included),
+            ),
+            (
+                "Case-level evidence available",
+                _fmt_bool(bool(cases)),
+            ),
+            (
+                "Instability detected",
+                _fmt_bool(_first(summary, "instability detected", "instability_detected")),
+            ),
+            (
+                "Schema version",
+                _first(
+                    _mapping(_first(result, "summary", default={})),
+                    "schema version",
+                    "schema_version",
+                    default=_first(result, "schema version", "schema_version"),
+                ),
+            ),
+        ]
+    )
+
+    parts = [cards, _subsection("Analysis Availability", availability)]
+
+    if cases:
+        case_rows: list[list[Any]] = []
+        for index, case in enumerate(cases, start=1):
+            session_metrics = _case_metrics(case)
+            group_metrics, group_ranking, _ = _participant_group_effect(case)
+            warnings = _sequence(_first(case, "warnings", default=[]))
+            case_rows.append(
+                [
+                    _participant_case_label(case, index),
+                    _participant_case_group(case, lookups),
+                    _status_badge(_first(case, "status")),
+                    _case_winner(case, lookups),
+                    _fmt_decimal(_first(session_metrics, "spearman"), 3),
+                    _fmt_decimal(
+                        _first(session_metrics, "kendall tau b", "kendall_tau_b"), 3
+                    ),
+                    _fmt_number(
+                        _first(
+                            session_metrics,
+                            "maximum rank displacement",
+                            "maximum_rank_displacement",
+                        ),
+                        0,
+                    ),
+                    _fmt_bool(
+                        _first(
+                            session_metrics,
+                            "top choice retained",
+                            "top_choice_retained",
+                        )
+                    ),
+                    _winner_from_ranking(group_ranking, lookups),
+                    _fmt_decimal(_first(group_metrics, "spearman"), 3),
+                    _fmt_number(
+                        _first(
+                            group_metrics,
+                            "maximum rank displacement",
+                            "maximum_rank_displacement",
+                        ),
+                        0,
+                    ),
+                    _fmt_bool(
+                        _first(
+                            group_metrics,
+                            "top choice retained",
+                            "top_choice_retained",
+                        )
+                    ),
+                    "; ".join(str(w) for w in warnings) if warnings else "None",
+                ]
+            )
+
+        parts.append(
+            _subsection(
+                "Participant Removal Cases",
+                render_table(
+                    [
+                        "Case",
+                        "Stakeholder group",
+                        "Status",
+                        "Session winner",
+                        "Session Spearman",
+                        "Session Kendall τ-b",
+                        "Session max displacement",
+                        "Session top retained",
+                        "Group winner",
+                        "Group Spearman",
+                        "Group max displacement",
+                        "Group top retained",
+                        "Warnings",
+                    ],
+                    case_rows,
+                    caption=(
+                        "Each row records both the session-level and stakeholder-group effect "
+                        "of removing one participant. Participant identifiers are not displayed "
+                        "in the shared audit report."
+                    ),
+                ),
+                intro=(
+                    "Session metrics measure change in the final collective ranking; group metrics "
+                    "measure change inside the omitted participant's stakeholder group."
+                ),
+            )
+        )
+    else:
+        parts.append(
+            _subsection(
+                "Participant Removal Cases",
+                '<div class="audit-note">'
+                '<strong>Case-level evidence is not included in this package.</strong>'
+                '<p>The participant-influence summary is still reported above. '
+                'No participant-level effect rows are reconstructed or inferred when the packaged '
+                'analysis omits them.</p>'
+                '</div>',
+            )
+        )
+
+    displacement_counts = _participant_displacement_counts(result, cases)
+    if displacement_counts:
+        distribution_rows = [
+            (f"Displacement {displacement}", float(count))
+            for displacement, count in sorted(displacement_counts.items())
+        ]
+        distribution_table = render_table(
+            ["Maximum rank displacement", "Cases"],
+            [
+                [_fmt_number(displacement, 0), _fmt_number(count, 0)]
+                for displacement, count in sorted(displacement_counts.items())
+            ],
+            caption="Distribution of maximum session-rank displacement across evaluable participant-removal cases.",
+        )
+        parts.append(
+            _subsection(
+                "Session Rank-Displacement Distribution",
+                _horizontal_bar_chart(
+                    distribution_rows,
+                    value_formatter=lambda v: _fmt_number(v, 0),
+                )
+                + distribution_table,
+                intro="This visualization reports recorded case counts only; it does not add an interpretation of participant influence.",
+            )
+        )
+
+    return _subsection(
+        "Participant Influence",
+        "".join(parts),
+        intro=(
+            "Leave-one-participant-out robustness results showing how the deterministic session "
+            "ranking changes when one participant is omitted. Participant identifiers are withheld "
+            "from this shared audit view; case sequence and stakeholder group are used when available."
+        ),
+    )
+
+
 def _render_analyses(analyses: dict, lookups: ReportLookups) -> str:
     results = [_mapping(row) for row in _sequence(_first(analyses, "selected results", "selected_results", default=[]))]
     by_method = {str(_first(row, "method", default="")): row for row in results}
@@ -1358,7 +1933,7 @@ def _render_analyses(analyses: dict, lookups: ReportLookups) -> str:
     if result := by_method.get("stakeholder_group_influence"):
         parts.append(_render_influence_analysis("Stakeholder Group Influence", result, lookups))
     if result := by_method.get("participant_influence"):
-        parts.append(_render_influence_analysis("Participant Influence", result, lookups))
+        parts.append(_render_participant_influence_analysis(result, lookups))
 
     return section(
         "analyses",
@@ -1452,11 +2027,394 @@ def _render_pairwise_matrix(record: Mapping[str, Any], lookups: ReportLookups) -
     return meta + render_table(headers, rows, css_class="matrix-table")
 
 
+
+def _named_alternative_set(values: Any, lookups: ReportLookups) -> _SafeHtml:
+    ids = _sequence(values)
+    if not ids:
+        return _safe_html('<span class="muted">None recorded</span>')
+    return _safe_html(
+        '<ul class="compact-list">'
+        + ''.join(
+            f'<li>{escape(_alternative_label(value, lookups))}</li>' for value in ids
+        )
+        + '</ul>'
+    )
+
+
+def _participant_effect_summary_cards(
+    metrics: Mapping[str, Any],
+    ranking: Sequence[Mapping[str, Any]],
+    lookups: ReportLookups,
+) -> str:
+    """Compact effect summary for rapid review before exact evidence tables."""
+    return _metric_cards(
+        [
+            (
+                'Resulting winner',
+                _winner_from_ranking(ranking, lookups),
+                None,
+            ),
+            (
+                'Maximum rank displacement',
+                _fmt_number(
+                    _first(
+                        metrics,
+                        'maximum rank displacement',
+                        'maximum_rank_displacement',
+                    ),
+                    0,
+                ),
+                None,
+            ),
+            (
+                'Strict reversals',
+                _fmt_number(_first(metrics, 'strict reversals', 'strict_reversals'), 0),
+                None,
+            ),
+            (
+                'Top choice retained',
+                _fmt_bool(
+                    _first(metrics, 'top choice retained', 'top_choice_retained')
+                ),
+                None,
+            ),
+            (
+                'Spearman',
+                _fmt_decimal(_first(metrics, 'spearman'), 3),
+                None,
+            ),
+            (
+                'Kendall τ-b',
+                _fmt_decimal(_first(metrics, 'kendall tau b', 'kendall_tau_b'), 3),
+                None,
+            ),
+        ]
+    )
+
+
+def _participant_comparison_details(
+    metrics: Mapping[str, Any],
+    lookups: ReportLookups,
+) -> str:
+    """Render exact before/after comparison fields separately from headline metrics."""
+    rows = [
+        (
+            'Baseline top set',
+            _named_alternative_set(
+                _first(metrics, 'baseline top set', 'baseline_top_set', default=[]),
+                lookups,
+            ),
+        ),
+        (
+            'Candidate top set',
+            _named_alternative_set(
+                _first(metrics, 'candidate top set', 'candidate_top_set', default=[]),
+                lookups,
+            ),
+        ),
+        (
+            'Baseline score margin',
+            _fmt_decimal(
+                _first(metrics, 'baseline score margin', 'baseline_score_margin'), 6
+            ),
+        ),
+        (
+            'Candidate score margin',
+            _fmt_decimal(
+                _first(metrics, 'candidate score margin', 'candidate_score_margin'), 6
+            ),
+        ),
+        (
+            'Top set changed',
+            _fmt_bool(_first(metrics, 'top set changed', 'top_set_changed')),
+        ),
+        (
+            'Tie transitions',
+            _fmt_number(_first(metrics, 'tie transitions', 'tie_transitions'), 0),
+        ),
+        ('Top K', _fmt_number(_first(metrics, 'top k', 'top_k'), 0)),
+        (
+            'Top-K retention',
+            _fmt_fraction_percent(
+                _first(metrics, 'top k retention', 'top_k_retention')
+            ),
+        ),
+    ]
+    return _definition_grid(rows)
+
+
+def _participant_affected_pairs(
+    metrics: Mapping[str, Any],
+    lookups: ReportLookups,
+) -> str:
+    pairs = [_mapping(row) for row in _sequence(
+        _first(metrics, 'affected pairs', 'affected_pairs', default=[])
+    )]
+    if not pairs:
+        return '<p class="empty-state">No affected alternative pairs recorded.</p>'
+    rows = []
+    for pair in pairs:
+        rows.append(
+            [
+                _alternative_label(_first(pair, 'left'), lookups),
+                _alternative_label(_first(pair, 'right'), lookups),
+                _humanize(_first(pair, 'change')),
+            ]
+        )
+    return render_table(
+        ['Left alternative', 'Right alternative', 'Recorded change'],
+        rows,
+    )
+
+
+def _participant_weighting_diagnostics_block(
+    diagnostics: Mapping[str, Any],
+) -> str:
+    if not diagnostics:
+        return '<p class="empty-state">No weighting diagnostics recorded.</p>'
+    return _definition_grid(
+        [
+            ('Method', _humanize(_first(diagnostics, 'method'))),
+            ('Provider', _first(diagnostics, 'provider')),
+            (
+                'Weight derivation',
+                _humanize(
+                    _first(diagnostics, 'weight derivation', 'weight_derivation')
+                ),
+            ),
+            (
+                'Consistency ratio',
+                _fmt_decimal(
+                    _first(diagnostics, 'consistency ratio', 'consistency_ratio'), 6
+                ),
+            ),
+            (
+                'Consistency threshold',
+                _fmt_decimal(
+                    _first(
+                        diagnostics,
+                        'consistency threshold',
+                        'consistency_threshold',
+                    ),
+                    4,
+                ),
+            ),
+            (
+                'Threshold exceeded',
+                _fmt_bool(
+                    _first(diagnostics, 'threshold exceeded', 'threshold_exceeded')
+                ),
+            ),
+        ]
+    )
+
+
+def _participant_effect_block(
+    *,
+    title: str,
+    level_label: str,
+    intro: str,
+    metrics: Mapping[str, Any],
+    ranking: Sequence[Mapping[str, Any]],
+    diagnostics: Mapping[str, Any],
+    lookups: ReportLookups,
+) -> str:
+    """Render one clearly bounded participant-influence effect scope."""
+    if not metrics and not ranking and not diagnostics:
+        body = '<p class="empty-state">No effect evidence recorded for this scope.</p>'
+    else:
+        body = ''.join(
+            [
+                _participant_effect_summary_cards(metrics, ranking, lookups),
+                '<div class="case-subsection"><h5>Comparison details</h5>',
+                _participant_comparison_details(metrics, lookups),
+                '</div>',
+                '<div class="case-subsection"><h5>Resulting ranking</h5>',
+                _render_ranking_rows(ranking, lookups),
+                '</div>',
+                '<div class="case-subsection"><h5>Weighting diagnostics</h5>',
+                _participant_weighting_diagnostics_block(diagnostics),
+                '</div>',
+                '<details class="case-secondary-detail">',
+                '<summary>Affected alternative pairs</summary>',
+                '<div class="detail-body">',
+                _participant_affected_pairs(metrics, lookups),
+                '</div></details>',
+            ]
+        )
+    return (
+        '<section class="participant-effect-block">'
+        '<div class="participant-effect-heading">'
+        f'<div><div class="effect-level">{escape(level_label)}</div>'
+        f'<h4>{escape(title)}</h4></div>'
+        '</div>'
+        f'<p class="effect-intro">{escape(intro)}</p>'
+        f'{body}'
+        '</section>'
+    )
+
+
+def _participant_case_context(
+    case: Mapping[str, Any],
+    input_for_display: Any,
+    warnings: Sequence[Any],
+    lookups: ReportLookups,
+) -> str:
+    """Render privacy-safe counterfactual context separately from analysis effects."""
+    inputs = _mapping(input_for_display)
+    group_id = _first(
+        inputs,
+        'stakeholder group id',
+        'stakeholder_group_id',
+        default=_first(case, 'scope id', 'scope_id'),
+    )
+    group_name = _participant_case_group(case, lookups)
+    required_groups = _sequence(
+        _first(inputs, 'required group keys', 'required_group_keys', default=[])
+    )
+    context = _definition_grid(
+        [
+            ('Participant case', _participant_case_label(case, _int(_first(case, 'sequence')) or 1)),
+            ('Stakeholder group', group_name),
+            ('Status', _status_badge(_first(case, 'status'))),
+            (
+                'Warnings',
+                '; '.join(str(item) for item in warnings) if warnings else 'None',
+            ),
+            ('Group key', _code(_first(inputs, 'group key', 'group_key'), css_class='short-code')),
+            ('Stakeholder group ID', _code(group_id)),
+        ]
+    )
+    required = (
+        '<div class="case-subsection"><h5>Required stakeholder groups</h5>'
+        + _unordered_list(required_groups)
+        + '</div>'
+        if required_groups
+        else ''
+    )
+    return context + required
+
+
+def _participant_case_provenance(case: Mapping[str, Any]) -> str:
+    rows: list[tuple[str, Any]] = [
+        (
+            'Projected case hash',
+            _code(_first(case, 'content hash', 'content_hash'), css_class='hash'),
+        ),
+    ]
+    source_hash = _first(case, 'source content hash', 'source_content_hash')
+    if source_hash not in (None, ''):
+        rows.append(('Source analysis-case hash', _code(source_hash, css_class='hash')))
+    projection_version = _first(
+        case, 'projection schema version', 'projection_schema_version'
+    )
+    if projection_version not in (None, ''):
+        rows.append(('Projection schema version', projection_version))
+    return _definition_grid(rows)
+
+
+def _render_participant_analysis_case(
+    case: Mapping[str, Any],
+    lookups: ReportLookups,
+) -> str:
+    """Purpose-built Appendix B renderer for participant influence cases."""
+    inputs = _redact_participant_identifiers(_first(case, 'input', default={}))
+    warnings = _sequence(_first(case, 'warnings', default=[]))
+    result = _mapping(_first(case, 'result', default={}))
+
+    session_metrics = _case_metrics(case)
+    session_ranking = _case_ranking(case)
+    session_diagnostics = _participant_session_weighting_diagnostics(case)
+    group_metrics, group_ranking, group_diagnostics = _participant_group_effect(case)
+
+    known_result_keys = {
+        'metrics',
+        'ranking',
+        'weighting_diagnostics',
+        'primary_effect_scope',
+        'stakeholder_group_effect',
+        'session_metrics',
+        'session_ranking',
+        'session_weighting_diagnostics',
+        'group_metrics',
+        'group_ranking',
+        'group_weighting_diagnostics',
+        'additional',
+    }
+    additional = dict(_mapping(_first(result, 'additional', default={})))
+    for key, value in result.items():
+        if key not in known_result_keys:
+            additional.setdefault(key, value)
+    additional = _redact_participant_identifiers(additional)
+
+    blocks = [
+        '<div class="participant-case-layout">',
+        '<section class="participant-case-section participant-context">',
+        '<div class="case-section-heading"><span class="case-section-number">1</span>'
+        '<div><div class="case-section-kicker">Counterfactual case</div>'
+        '<h4>Case Context</h4></div></div>',
+        '<p class="case-section-intro">Identifies the stakeholder group associated with the omitted participant without exposing participant identity.</p>',
+        _participant_case_context(case, inputs, warnings, lookups),
+        '</section>',
+        '<section class="participant-case-section">',
+        '<div class="case-section-heading"><span class="case-section-number">2</span>'
+        '<div><div class="case-section-kicker">Collective outcome</div>'
+        '<h4>Session-Level Effect</h4></div></div>',
+        _participant_effect_block(
+            title='Effect on final session ranking',
+            level_label='PRIMARY EFFECT SCOPE',
+            intro='Compares the original session result with the counterfactual result after omitting this participant.',
+            metrics=session_metrics,
+            ranking=session_ranking,
+            diagnostics=session_diagnostics,
+            lookups=lookups,
+        ),
+        '</section>',
+        '<section class="participant-case-section">',
+        '<div class="case-section-heading"><span class="case-section-number">3</span>'
+        '<div><div class="case-section-kicker">Within-group outcome</div>'
+        '<h4>Stakeholder-Group Effect</h4></div></div>',
+        _participant_effect_block(
+            title='Effect within the participant stakeholder group',
+            level_label='SECONDARY EFFECT SCOPE',
+            intro='Shows how the same omission changes the participant stakeholder group before session-level aggregation.',
+            metrics=group_metrics,
+            ranking=group_ranking,
+            diagnostics=group_diagnostics,
+            lookups=lookups,
+        ),
+        '</section>',
+        '<section class="participant-case-section participant-provenance">',
+        '<div class="case-section-heading"><span class="case-section-number">4</span>'
+        '<div><div class="case-section-kicker">Traceability</div>'
+        '<h4>Audit &amp; Provenance</h4></div></div>',
+        '<p class="case-section-intro">Links this privacy-safe case projection back to its deterministic source evidence.</p>',
+        _participant_case_provenance(case),
+        '</section>',
+    ]
+    if additional:
+        blocks.extend(
+            [
+                '<details class="case-secondary-detail participant-additional">',
+                '<summary>Additional deterministic fields</summary>',
+                '<div class="detail-body">',
+                _render_json_object(additional),
+                '</div></details>',
+            ]
+        )
+    blocks.append('</div>')
+    return ''.join(blocks)
+
+
 def _render_analysis_case(case: Mapping[str, Any], lookups: ReportLookups) -> str:
+    """Render one detailed Appendix B analysis case."""
+    is_participant_case = _first(case, "subject type", "subject_type") == "participant"
+    if is_participant_case:
+        return _render_participant_analysis_case(case, lookups)
+
     inputs = _first(case, "input", default={})
-    result = _mapping(_first(case, "result", default={}))
-    metrics = _mapping(_first(result, "metrics", default={}))
-    ranking_rows = [_mapping(row) for row in _sequence(_first(result, "ranking", default=[]))]
+    metrics = _case_metrics(case)
+    ranking_rows = _case_ranking(case)
     warnings = _sequence(_first(case, "warnings", default=[]))
 
     metadata = _definition_grid(
@@ -1465,32 +2423,25 @@ def _render_analysis_case(case: Mapping[str, Any], lookups: ReportLookups) -> st
             ("Status", _status_badge(_first(case, "status"))),
             ("Scope", _scope_label(case, lookups)),
             ("Subject", _subject_label(case, lookups)),
-            ("Content hash", _code(_first(case, "content hash", "content_hash"), css_class="hash")),
+            (
+                "Content hash",
+                _code(_first(case, "content hash", "content_hash"), css_class="hash"),
+            ),
             ("Warnings", "; ".join(str(w) for w in warnings) if warnings else "None"),
         ]
     )
-
-    ranking_table = ""
-    if ranking_rows:
-        ranking_table = render_table(
-            ["Rank", "Alternative", "Preference value"],
-            [
-                [
-                    _first(row, "rank"),
-                    _alternative_label(_first(row, "alternative id", "alternative_id"), lookups),
-                    _fmt_decimal(_first(row, "preference value", "preference_value"), 6),
-                ]
-                for row in sorted(ranking_rows, key=lambda row: _int(_first(row, "rank", default=10**9)) or 10**9)
-            ],
-        )
-
     return (
         metadata
         + '<h5>Input</h5>'
         + _render_raw_value(inputs)
         + '<h5>Metrics</h5>'
         + _render_raw_value(metrics)
-        + ("<h5>Resulting ranking</h5>" + ranking_table if ranking_table else "")
+        + (
+            '<h5>Resulting ranking</h5>'
+            + _render_ranking_rows(ranking_rows, lookups)
+            if ranking_rows
+            else ""
+        )
     )
 
 
@@ -1498,12 +2449,19 @@ def _render_appendices(
     *,
     context: dict,
     configuration: dict,
+    validation: dict,
     weighting: dict,
     ranking: dict,
     analyses: dict,
+    provenance: dict,
     lookups: ReportLookups,
 ) -> str:
-    weighting_records = [_mapping(row) for row in _sequence(_first(weighting, "aggregate matrices", "aggregate_matrices", default=[]))]
+    weighting_records = [
+        _mapping(row)
+        for row in _sequence(
+            _first(weighting, "aggregate matrices", "aggregate_matrices", default=[])
+        )
+    ]
     matrix_blocks = []
     for index, record in enumerate(weighting_records, start=1):
         label = _weighting_scope_label(record, lookups)
@@ -1520,18 +2478,40 @@ def _render_appendices(
         intro="Exact pairwise matrices and their associated weighting diagnostics.",
     )
 
-    analysis_results = [_mapping(row) for row in _sequence(_first(analyses, "selected results", "selected_results", default=[]))]
+    analysis_results = [
+        _mapping(row)
+        for row in _sequence(
+            _first(analyses, "selected results", "selected_results", default=[])
+        )
+    ]
     analysis_blocks = []
     for result in analysis_results:
         method = str(_first(result, "method", default="Unidentified analysis"))
         case_blocks = []
         for case in _analysis_cases(result):
             sequence = _first(case, "sequence", default="?")
-            subject = _subject_label(case, lookups)
-            scope = _scope_label(case, lookups)
+            is_participant = _first(case, "subject type", "subject_type") == "participant"
+            if is_participant:
+                group = _participant_case_group(case, lookups)
+                status = _humanize(_first(case, "status", default="Not recorded"))
+                summary = (
+                    '<span class="case-summary-title">'
+                    f'Participant case {escape(str(sequence))}'
+                    '</span>'
+                    '<span class="case-summary-meta">'
+                    f'{escape(group)} · {escape(status)} · Leave-one-participant-out'
+                    '</span>'
+                )
+            else:
+                subject = _subject_label(case, lookups)
+                scope = _scope_label(case, lookups)
+                summary = (
+                    f'Case {escape(str(sequence))} · '
+                    f'{escape(scope)} · {escape(subject)}'
+                )
             case_blocks.append(
-                '<details class="case-detail">'
-                f'<summary>Case {escape(str(sequence))} · {escape(scope)} · {escape(subject)}</summary>'
+                '<details class="case-detail participant-case-detail">'
+                f'<summary>{summary}</summary>'
                 f'<div class="detail-body">{_render_analysis_case(case, lookups)}</div>'
                 "</details>"
             )
@@ -1544,30 +2524,48 @@ def _render_appendices(
     appendix_b = section(
         "appendix-analysis-cases",
         "Appendix B. Detailed Analysis Cases",
-        "".join(analysis_blocks) or '<p class="empty-state">No analysis cases recorded.</p>',
-        intro="Case-level deterministic inputs, metrics, rerankings, hashes, status values, and warnings.",
+        "".join(analysis_blocks)
+        or '<p class="empty-state">No analysis cases recorded.</p>',
+        intro=(
+            "Case-level deterministic inputs, metrics, rerankings, diagnostics, hashes, "
+            "status values, and warnings. Participant Influence cases use a dedicated "
+            "four-part layout separating session and stakeholder-group effects."
+        ),
     )
 
+    # A single JSON object is easier to inspect, copy, diff, and validate than the
+    # recursive HTML table/definition-list view. Participant identifiers remain
+    # redacted before serialization.
     raw_evidence = {
         "01_context": context,
         "02_configuration": configuration,
+        "03_validation": validation,
         "04_weighting": weighting,
         "05_ranking": ranking,
-        "06_analyses": analyses,
+        "06_analyses": _redact_participant_identifiers(analyses),
+        "07_provenance": provenance,
     }
-    raw_blocks = []
-    for name, value in raw_evidence.items():
-        raw_blocks.append(
-            '<details class="raw-evidence">'
-            f'<summary>{escape(name[3:].replace("_", " ").title())} — raw packaged structure</summary>'
-            f'<div class="detail-body">{_render_raw_value(value)}</div>'
-            "</details>"
-        )
+    appendix_c_body = (
+        '<div class="audit-note">'
+        '<strong>JSON display</strong>'
+        '<p>This is a pretty-printed HTML projection of the packaged evidence. '
+        'It is generated with Python\'s standard-library json module; no third-party '
+        'JSON or syntax-highlighting library is required.</p>'
+        '</div>'
+        '<details class="raw-json-evidence">'
+        '<summary>Raw packaged evidence JSON</summary>'
+        '<div class="detail-body">'
+        + _render_json_object(raw_evidence)
+        + '</div></details>'
+    )
     appendix_c = section(
         "appendix-raw",
         "Appendix C. Raw Evidence",
-        "".join(raw_blocks),
-        intro="Recursive rendering of the underlying evidence structures. This appendix is intentionally less presentation-oriented than the main report.",
+        appendix_c_body,
+        intro=(
+            "The complete report evidence is presented below as one JSON object so field "
+            "names, nesting, arrays, and scalar values can be inspected directly."
+        ),
     )
 
     return appendix_a + appendix_b + appendix_c
@@ -1720,6 +2718,16 @@ a { color: var(--accent-dark); }
     background: var(--surface);
 }
 .callout h3 { font-size: 14px; }
+.audit-note {
+    margin: 12px 0;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 6px;
+    background: var(--surface);
+}
+.audit-note strong { display: block; margin-bottom: 4px; }
+.audit-note p { margin: 4px 0 0; color: var(--muted); }
 .table-wrap {
     width: 100%;
     overflow-x: auto;
@@ -1796,13 +2804,107 @@ summary {
 .raw-dl { display: grid; grid-template-columns: minmax(140px, 240px) 1fr; gap: 5px 12px; }
 .raw-dl dt { font-weight: 700; color: var(--muted); }
 .raw-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
 .raw-list { margin: 5px 0; padding-left: 22px; }
+
+.case-summary-title { display: block; font-weight: 750; }
+.case-summary-meta {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+}
+.participant-case-layout { display: grid; gap: 18px; }
+.participant-case-section {
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+}
+.participant-context,
+.participant-provenance { background: var(--surface); }
+.case-section-heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 10px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+.case-section-heading h4 { margin: 0; font-size: 16px; }
+.case-section-number {
+    display: inline-grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 800;
+}
+.case-section-kicker,
+.effect-level {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+.case-section-intro,
+.effect-intro {
+    color: var(--muted);
+    max-width: 900px;
+}
+.participant-effect-block {
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 7px;
+    background: #fff;
+}
+.participant-effect-heading h4 { margin: 2px 0 0; font-size: 14px; }
+.case-subsection {
+    margin: 18px 0;
+    padding-top: 4px;
+}
+.case-subsection h5 {
+    margin: 0 0 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--surface-2);
+}
+.case-secondary-detail { margin-top: 14px; }
+.participant-additional { margin-top: 4px; }
+.json-wrap {
+    width: 100%;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: #0f1720;
+}
+.json-object {
+    margin: 0;
+    padding: 18px;
+    min-width: 720px;
+    color: #e6edf3;
+    background: transparent;
+    font: 11.5px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    white-space: pre;
+    tab-size: 2;
+}
+.json-object code { font: inherit; color: inherit; }
+.raw-json-evidence > summary { font-size: 13px; }
 
 @media (max-width: 800px) {
     main { width: min(100% - 24px, 1180px); }
     .toc ol { columns: 1; }
     .callout-grid, .chart-pair { grid-template-columns: 1fr; }
     .raw-dl { grid-template-columns: 1fr; }
+    .participant-case-section { padding: 12px; }
+    .json-object { min-width: 640px; }
 }
 
 @media print {
@@ -1812,12 +2914,14 @@ summary {
     .toc { break-after: page; }
     .report-section { margin: 24px 0; }
     .section-heading { break-after: avoid; }
-    .metric-card, .callout, .definition-item, .figure { break-inside: avoid; }
+    .metric-card, .callout, .definition-item, .figure, .participant-effect-block { break-inside: avoid; }
     tr { break-inside: avoid; }
     a { color: inherit; text-decoration: none; }
     details:not([open]) > :not(summary) { display: block !important; }
     summary { list-style: none; }
     .chart { min-width: 0; }
+    .json-wrap { border: 0; }
+    .json-object { min-width: 0; color: #000; background: #fff; white-space: pre-wrap; word-break: break-word; }
 }
 """
 
@@ -1868,9 +2972,11 @@ def deterministic_audit_export_html(report: SharedReport) -> bytes:
         _render_appendices(
             context=context,
             configuration=configuration,
+            validation=validation,
             weighting=weighting,
             ranking=ranking,
             analyses=analyses,
+            provenance=provenance,
             lookups=lookups,
         ),
     ]

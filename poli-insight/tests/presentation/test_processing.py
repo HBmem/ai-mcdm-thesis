@@ -556,8 +556,10 @@ class SessionProcessingPageTests(unittest.TestCase):
             latest_batch_status=RunStatus.SUCCEEDED,
             latest_batch_created_at=None,
             latest_batch_roster_hash="a" * 64,
+            current_roster_hash="a" * 64,
+            roster_is_current=True,
         )
-        run = SimpleNamespace(status=RunStatus.SUCCEEDED)
+        run = SimpleNamespace(processing_run_id="run-1", status=RunStatus.SUCCEEDED)
 
         self.assertEqual(processing._current_stage_index(overview, (run,)), 3)
 
@@ -579,8 +581,10 @@ class SessionProcessingPageTests(unittest.TestCase):
             latest_batch_status=RunStatus.FAILED,
             latest_batch_created_at=None,
             latest_batch_roster_hash="a" * 64,
+            current_roster_hash="a" * 64,
+            roster_is_current=True,
         )
-        run = SimpleNamespace(status=RunStatus.FAILED)
+        run = SimpleNamespace(processing_run_id="run-1", status=RunStatus.FAILED)
 
         highest = processing._current_stage_index(overview, (run,))
         statuses = processing._stage_statuses(
@@ -591,7 +595,7 @@ class SessionProcessingPageTests(unittest.TestCase):
         )
 
         self.assertEqual(highest, 2)
-        self.assertEqual(statuses[:3], ("completed", "completed", "failed"))
+        self.assertEqual(statuses[:3], ("complete", "complete", "failed"))
         self.assertEqual(statuses[3:], ("unavailable",) * 3)
 
     def test_submission_validation_runs_for_selected_closed_session(self) -> None:
@@ -599,8 +603,8 @@ class SessionProcessingPageTests(unittest.TestCase):
 
         self.assertFalse(app.exception)
         labels = tuple(item.label for item in app.button)
-        self.assertIn("Validate current submissions", labels)
-        self.assertEqual(app.session_state["processing:viewed_stage"], 1)
+        self.assertIn("Begin Process", labels)
+        self.assertEqual(app.session_state["processing:workflow:session-1:viewed"], 1)
         confirmation = next(
             item
             for item in app.checkbox
@@ -611,7 +615,7 @@ class SessionProcessingPageTests(unittest.TestCase):
             next(
                 item
                 for item in app.button
-                if item.label == "Validate current submissions"
+                if item.key == "processing:validate:session-1"
             )
             .click()
             .run()
@@ -677,7 +681,7 @@ class SessionProcessingPageTests(unittest.TestCase):
         app = AppTest.from_string(PROCESSED_WORKSPACE_APP, default_timeout=10).run()
 
         self.assertFalse(app.exception)
-        self.assertEqual(app.session_state["processing:viewed_stage"], 3)
+        self.assertEqual(app.session_state["processing:workflow:session-processed:viewed"], 3)
         markdown = " ".join(item.value for item in app.markdown)
         self.assertIn("Create Ranking", markdown)
         self.assertIn("Session Processing Steps", markdown)

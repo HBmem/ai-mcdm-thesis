@@ -18,19 +18,27 @@ from poli_insight.domain.enum import (
     RunInclusionStatus,
     RunStatus,
 )
+from poli_insight.presentation.streamlit.components.analysis_tests import (
+    TEST_DEFINITIONS,
+)
 from poli_insight.presentation.streamlit.components.layout import (
     format_datetime,
     render_section_heading,
     surface,
 )
+from poli_insight.presentation.streamlit.components.process_ui import (
+    fail_process,
+    process_button,
+)
+from poli_insight.presentation.streamlit.components.workflow import (
+    record_completion,
+    resolve_workflow,
+    workflow_key,
+)
 from poli_insight.presentation.streamlit.context import PageContext
 
 _METHOD_LABELS = {
-    AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION: "Weight perturbation",
-    AnalysisMethod.CRITERION_REMOVAL: "Criterion removal",
-    AnalysisMethod.RANK_REVERSAL: "Rank reversal",
-    AnalysisMethod.STAKEHOLDER_GROUP_INFLUENCE: "Stakeholder-group influence",
-    AnalysisMethod.PARTICIPANT_INFLUENCE: "Participant influence",
+    method: definition.label for method, definition in TEST_DEFINITIONS.items()
 }
 
 
@@ -50,6 +58,80 @@ def render_package_stage(
         "Freeze one coherent processing, ranking, and analysis lineage into "
         "machine-readable bundle versions. Packaging does not publish results."
     )
+    session_id = detail.summary.session_id
+    workflow = resolve_workflow(
+        overview, processing_runs, ranking_runs, analysis_runs, package_runs
+    )
+    completed_package = next(
+        (run for run in package_runs if run.package_run_id == workflow.package_id), None
+    )
+    if completed_package is not None:
+        st.success(
+            "All 6 steps complete · Results package created", icon=":material/task_alt:"
+        )
+        source_ranking = next(
+            run
+            for run in ranking_runs
+            if run.ranking_run_id == completed_package.source_ranking_run_id
+        )
+        st.write(
+            f"Package run {completed_package.run_number} · Source ranking Run {source_ranking.run_number}"
+        )
+        st.caption(
+            "Versions: "
+            + ", ".join(value.value for value in completed_package.variants)
+        )
+        st.caption(
+            f"Included analysis runs: {len(completed_package.source_analysis_run_ids)} · Warnings: {_warning_count(completed_package)}"
+        )
+        included_methods = {
+            run.method
+            for run in analysis_runs
+            if run.analysis_run_id in completed_package.source_analysis_run_ids
+        }
+        st.write(
+            "Included tests: "
+            + ", ".join(
+                _METHOD_LABELS[method]
+                for method in AnalysisMethod
+                if method in included_methods
+            )
+        )
+        omitted = [
+            _METHOD_LABELS[method]
+            for method in AnalysisMethod
+            if method not in included_methods
+        ]
+        if omitted:
+            st.caption("Tests not included in this package: " + ", ".join(omitted))
+        if _warning_count(completed_package):
+            st.warning(
+                "This package contains warnings. Review the package evidence before preparing reports."
+            )
+        st.info(
+            "Packaging does not publish results. Review the evidence in Reports & Publication."
+        )
+        if st.button(
+            "Open Reports & Publication",
+            type="primary",
+            key=f"processing:package:reports:{completed_package.package_run_id}",
+        ):
+            st.session_state["reports:session_id"] = session_id
+            st.switch_page(context.routes["reports"])
+        with st.expander("Review package", expanded=False):
+            _package_history((completed_package,), context)
+        if read_only or not st.checkbox(
+            "Configure another package", key=workflow_key(session_id, "another_package")
+        ):
+            earlier = tuple(
+                run
+                for run in package_runs
+                if run.package_run_id != completed_package.package_run_id
+            )
+            if earlier:
+                with st.expander("Earlier packages"):
+                    _package_history(earlier, context)
+            return
     successful_rankings = tuple(
         item for item in ranking_runs if item.status == RunStatus.SUCCEEDED
     )
@@ -250,9 +332,10 @@ def render_package_stage(
         current.progress(fraction, text=progress.phase.replace("_", " ").title())
         status.write(progress.message)
 
-    if st.button(
+    if process_button(
         "Create selected bundle versions",
-        type="primary",
+        description="Begin Process · Freeze the selected evidence into immutable result bundles.",
+        next_step="Processing completion summary",
         disabled=invalid,
         key=f"processing:package:create:{ranking.ranking_run_id}",
     ):
@@ -270,7 +353,9 @@ def render_package_stage(
             )
         except CreateResultPackageError as error:
             status.update(label="Package creation failed", state="error", expanded=True)
-            st.error(str(error))
+            fail_process(
+                f"processing:package:create:{ranking.ranking_run_id}", str(error)
+            )
         else:
             status.update(label="Package complete", state="complete", expanded=True)
             st.success(
@@ -278,13 +363,14 @@ def render_package_stage(
                 + ", ".join(item.value for item in result.variants)
                 + "."
             )
-            st.session_state["reports:session_id"] = detail.summary.session_id
-            if st.button(
-                "Open AI Reports & Publication",
-                icon=":material/arrow_forward:",
-                key=f"processing:package:reports:{result.package_run_id}",
-            ):
-                st.switch_page(context.routes["admin_reports"])
+            st.session_state.pop(workflow_key(session_id, "another_package"), None)
+            record_completion(
+                session_id,
+                5,
+                f"Package run {result.run_number} created with {result.warning_count} warnings.",
+                evidence_id=result.package_run_id,
+            )
+            st.rerun()
     _package_history(package_runs, context)
 
 

@@ -26,6 +26,7 @@ class PageHeader:
 
 
 AdminSurfaceVariant = Literal[
+    "action",
     "filter",
     "results",
     "session_card",

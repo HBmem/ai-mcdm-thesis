@@ -8,6 +8,7 @@ from poli_insight.presentation.streamlit.components.layout import (
     format_datetime,
     metric_row,
     render_capability_notice,
+    render_empty_state,
     render_page_header,
     surface,
 )
@@ -73,7 +74,8 @@ def render(context: PageContext) -> None:
                 ),
             )
     if not paused_count and not closed_count:
-        st.success(
+        render_empty_state(
+            "All caught up",
             "No operational session items currently require attention.",
             icon=":material/check_circle:",
         )

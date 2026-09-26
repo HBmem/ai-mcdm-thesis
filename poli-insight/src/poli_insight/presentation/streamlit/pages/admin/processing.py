@@ -12,7 +12,6 @@ from streamlit_extras.card_selector import (  # type: ignore[import-untyped]
     card_selector,
 )
 from streamlit_extras.pagination import pagination  # type: ignore[import-untyped]
-from streamlit_extras.steps import steps  # type: ignore[import-untyped]
 
 from poli_insight.application.queries.page_queries import (
     PageQueryError,
@@ -46,6 +45,10 @@ from poli_insight.domain.enum import (
     SubmissionReviewStatus,
     ValidationStatus,
 )
+from poli_insight.presentation.streamlit.components.charts import (
+    ChartSpec,
+    render_chart,
+)
 from poli_insight.presentation.streamlit.components.layout import (
     AdminSurfaceVariant,
     PageHeader,
@@ -56,8 +59,20 @@ from poli_insight.presentation.streamlit.components.layout import (
     render_page_header,
     render_section_heading,
 )
+from poli_insight.presentation.streamlit.components.process_ui import (
+    fail_process,
+    process_button,
+    render_completion_receipt,
+    render_workflow_header,
+)
 from poli_insight.presentation.streamlit.components.session_search import (
     render_session_search,
+)
+from poli_insight.presentation.streamlit.components.workflow import (
+    apply_pending_navigation,
+    record_completion,
+    resolve_workflow,
+    workflow_key,
 )
 from poli_insight.presentation.streamlit.context import PageContext
 from poli_insight.presentation.streamlit.pages.admin.analysis_section import (
@@ -75,14 +90,6 @@ _STAGES = (
     "Create Ranking",
     "Sensitivity and Robustness",
     "Package Results",
-)
-_STAGE_ICONS = (
-    ":material/domain_verification:",
-    ":material/fact_check:",
-    ":material/weight:",
-    ":material/leaderboard:",
-    ":material/query_stats:",
-    ":material/package_2:",
 )
 _MATRIX_LEVEL_ORDER = ("participant", "stakeholder_group", "session")
 _MATRIX_LEVEL_PRESENTATION: dict[
@@ -336,7 +343,7 @@ def _render_processing_session_card(
         ):
             st.session_state["processing:session_id"] = item.session_id
             st.session_state["processing:workspace_mode"] = mode.value
-            st.session_state.pop("processing:viewed_stage", None)
+            st.session_state.pop(workflow_key(item.session_id, "viewed"), None)
             st.rerun()
 
 
@@ -411,70 +418,46 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
         st.session_state.get("processing:workspace_mode")
         == ProcessingQueueMode.PROCESSED.value
     )
-    current_index = _current_stage_index(
-        overview, runs, ranking_runs, analysis_runs, package_runs
+    workflow = resolve_workflow(
+        overview,
+        runs,
+        ranking_runs,
+        analysis_runs,
+        package_runs,
+        scenario_ready=detail.summary.scenario_status.value == "ready",
     )
+    current_index = workflow.current
+    apply_pending_navigation(session_id, workflow)
+    viewed_key = workflow_key(session_id, "viewed")
     selected_index = max(
-        0,
-        min(
-            int(st.session_state.get("processing:viewed_stage", current_index)),
-            current_index,
-        ),
+        0, min(int(st.session_state.get(viewed_key, current_index)), current_index)
     )
-    st.session_state["processing:viewed_stage"] = selected_index
+    st.session_state[viewed_key] = selected_index
+    # Selected current ranking is also used to avoid advancing historical analyses.
+    st.session_state[workflow_key(session_id, "ranking")] = workflow.ranking_id
     with admin_surface(key=f"workflow_{session_id}", variant="workflow_navigation"):
-        render_section_heading("Session Processing Steps", level=2)
-        navigation = st.columns((0.25, 0.5, 0.25))
-        if navigation[0].button(
-            "Exit to queues",
-            icon=":material/arrow_back:",
-            key="processing:back",
-            width="stretch",
+        if st.button(
+            "Exit to queues", icon=":material/arrow_back:", key="processing:back"
         ):
             _clear_workspace_state()
             st.rerun()
-        navigation[1].caption(
-            "Archived sessions are inspection-only. Navigation is limited to "
-            "stages supported by persisted evidence."
-            if read_only
-            else "Navigate completed and currently available workflow stages."
-        )
-        steps(
-            _STAGES,
-            current=selected_index,
-            icons=_STAGE_ICONS,
-            horizontal=True,
-            key=f"processing:steps:{session_id}:{current_index}",
-        )
-        _render_stage_badges(
-            selected_index=selected_index,
-            highest_viewable=current_index,
-            overview=overview,
-            runs=runs,
-            ranking_runs=ranking_runs,
-            analysis_runs=analysis_runs,
-            package_runs=package_runs,
-        )
-        controls = st.columns((0.2, 0.6, 0.2))
+        render_workflow_header(workflow, selected_index, session_id)
+        controls = st.columns(2)
         if controls[0].button(
             "Previous",
-            icon=":material/arrow_back:",
             disabled=selected_index == 0,
-            key=f"processing:previous:{session_id}:{selected_index}",
-            width="stretch",
+            key=f"processing:previous:{session_id}",
         ):
-            st.session_state["processing:viewed_stage"] = selected_index - 1
+            st.session_state[viewed_key] = selected_index - 1
             st.rerun()
-        controls[1].write(f"**{_STAGES[selected_index]}**")
-        if controls[2].button(
+        if controls[1].button(
             "Next",
-            icon=":material/arrow_forward:",
             disabled=selected_index >= current_index,
-            key=f"processing:next:{session_id}:{selected_index}",
-            width="stretch",
+            key=f"processing:next:{session_id}",
         ):
-            st.session_state["processing:viewed_stage"] = selected_index + 1
+            st.session_state[viewed_key] = selected_index + 1
             st.rerun()
+    render_completion_receipt(session_id)
 
     _render_processing_details(context, detail, runs)
     with admin_surface(key=f"stage_{session_id}", variant="stage_content"):
@@ -484,7 +467,7 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
                 "generation and ranking actions are unavailable."
             )
         if selected_index == 0:
-            _render_session_validation_stage(detail, overview)
+            _render_session_validation_stage(detail, overview, read_only=read_only)
         elif selected_index == 1:
             _render_submission_validation_stage(
                 context,
@@ -528,7 +511,7 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
                 ranking_runs,
                 analysis_runs,
                 package_runs,
-                read_only=overview.session_status == SessionStatus.ARCHIVED,
+                read_only=read_only,
             )
     _render_bundle_preview(
         detail,
@@ -542,134 +525,29 @@ def _render_processing_workspace(context: PageContext, session_id: str) -> None:
 
 
 def _current_stage_index(
-    overview: SessionValidationOverview,
-    runs: tuple[Any, ...],
-    ranking_runs: tuple[Any, ...] = (),
-    analysis_runs: tuple[Any, ...] = (),
-    package_runs: tuple[Any, ...] = (),
+    overview, runs, ranking_runs=(), analysis_runs=(), package_runs=()
 ) -> int:
-    current_weighting = next(
-        (run for run in runs if run.status == RunStatus.SUCCEEDED),
-        None,
-    )
-    successful_ranking = next(
-        (
-            run
-            for run in ranking_runs
-            if run.status == RunStatus.SUCCEEDED
-            and run.roster_hash == overview.current_roster_hash
-            and current_weighting is not None
-            and run.source_processing_run_id == current_weighting.processing_run_id
-        ),
-        None,
-    )
-    if successful_ranking is not None and any(
-        run.status == RunStatus.SUCCEEDED
-        and run.source_ranking_run_id == successful_ranking.ranking_run_id
-        for run in analysis_runs
-    ):
-        return 5
-    if any(
-        run.status == RunStatus.SUCCEEDED
-        and run.roster_hash == overview.current_roster_hash
-        and current_weighting is not None
-        and run.source_processing_run_id == current_weighting.processing_run_id
-        for run in ranking_runs
-    ):
-        return 4
-    latest = runs[0] if runs else None
-    if any(run.status == RunStatus.SUCCEEDED for run in runs):
-        return 3
-    if not (
-        overview.session_status in {SessionStatus.CLOSED, SessionStatus.ARCHIVED}
-        and overview.has_active_configuration
-        and overview.effective_submitted_count > 0
-    ):
-        return 0
-    if latest is None or not overview.validation_complete:
-        return 1
-    return 2
-
-
-def _render_stage_badges(
-    *,
-    selected_index: int,
-    highest_viewable: int,
-    overview: SessionValidationOverview,
-    runs: tuple[Any, ...],
-    ranking_runs: tuple[Any, ...] = (),
-    analysis_runs: tuple[Any, ...] = (),
-    package_runs: tuple[Any, ...] = (),
-) -> None:
-    statuses = _stage_statuses(
-        selected_index=selected_index,
-        highest_viewable=highest_viewable,
-        overview=overview,
-        runs=runs,
-        ranking_runs=ranking_runs,
-        analysis_runs=analysis_runs,
-        package_runs=package_runs,
-    )
-    columns = st.columns(6)
-    colors: dict[
-        str,
-        Literal["green", "blue", "orange", "red", "gray"],
-    ] = {
-        "completed": "green",
-        "current": "blue",
-        "blocked": "orange",
-        "failed": "red",
-        "unavailable": "gray",
-    }
-    for index, status in enumerate(statuses):
-        columns[index].badge(
-            status.title(),
-            color=colors[status],
-            icon=":material/check_circle:" if status == "completed" else None,
-        )
+    return resolve_workflow(
+        overview, runs, ranking_runs, analysis_runs, package_runs
+    ).current
 
 
 def _stage_statuses(
     *,
-    selected_index: int,
-    highest_viewable: int,
-    overview: SessionValidationOverview,
-    runs: tuple[Any, ...],
-    ranking_runs: tuple[Any, ...] = (),
-    analysis_runs: tuple[Any, ...] = (),
-    package_runs: tuple[Any, ...] = (),
-) -> tuple[str, ...]:
-    latest = runs[0] if runs else None
-    latest_ranking = ranking_runs[0] if ranking_runs else None
-    values: list[str] = []
-    for index in range(len(_STAGES)):
-        if index < highest_viewable:
-            values.append("completed")
-        elif index > highest_viewable:
-            values.append("unavailable")
-        elif (
-            index == 3
-            and latest_ranking is not None
-            and latest_ranking.status == RunStatus.FAILED
-        ) or (latest is not None and latest.status == RunStatus.FAILED and index >= 1):
-            values.append("failed")
-        elif index == 5 and any(
-            item.status == RunStatus.SUCCEEDED for item in package_runs
-        ):
-            values.append("completed")
-        elif index >= 4 and index != selected_index:
-            values.append("blocked")
-        elif index == 0 and not (
-            overview.session_status in {SessionStatus.CLOSED, SessionStatus.ARCHIVED}
-            and overview.has_active_configuration
-            and overview.effective_submitted_count > 0
-        ):
-            values.append("blocked")
-        elif index == selected_index:
-            values.append("current")
-        else:
-            values.append("blocked")
-    return tuple(values)
+    selected_index,
+    highest_viewable,
+    overview,
+    runs,
+    ranking_runs=(),
+    analysis_runs=(),
+    package_runs=(),
+):
+    return tuple(
+        step.status
+        for step in resolve_workflow(
+            overview, runs, ranking_runs, analysis_runs, package_runs
+        ).steps
+    )
 
 
 def _list_ranking_runs(context: PageContext, session_id: str) -> tuple[Any, ...]:
@@ -842,6 +720,8 @@ def _render_processing_details(
 def _render_session_validation_stage(
     detail: Any,
     overview: SessionValidationOverview,
+    *,
+    read_only: bool = False,
 ) -> None:
     render_section_heading("Session Validation", level=2)
     st.caption("Live readiness preflight; no approval record is created.")
@@ -892,6 +772,17 @@ def _render_session_validation_stage(
             "The frozen session input is ready for submission validation.",
             icon=":material/check_circle:",
         )
+    if not read_only and process_button(
+        "Check session readiness",
+        key=f"processing:preflight:{detail.summary.session_id}",
+        description="Begin Process · Check the frozen session inputs.",
+        blockers=blockers,
+        next_step="Submission Validation",
+    ):
+        record_completion(
+            detail.summary.session_id, 0, "Session inputs are ready for validation."
+        )
+        st.rerun()
 
 
 def _render_submission_validation_stage(
@@ -904,6 +795,8 @@ def _render_submission_validation_stage(
 ) -> None:
     session_id = detail.summary.session_id
     render_section_heading("Submission Validation", level=2)
+    st.write("Validate the frozen roster, then resolve any required warning decisions.")
+    _render_validation_command(context, session_id, overview, read_only=read_only)
     level_cards = (
         (
             "Individual evidence",
@@ -1011,7 +904,17 @@ def _render_group_submission_summary(
         if int(comparison.to_numpy().sum()) == 0:
             st.info("No group comparison counts are available to chart.")
         else:
-            st.bar_chart(comparison, stack=False)
+            render_chart(
+                comparison,
+                ChartSpec(
+                    "Submission coverage by stakeholder group",
+                    "Stakeholder group",
+                    "Participants / submissions (count)",
+                    f"Session {session_id} · Current roster",
+                    "Enrollment is the available baseline, not a target. Submitted, valid, and warned counts overlap.",
+                    integer=True,
+                ),
+            )
 
 
 def _render_session_submission_summary(
@@ -1062,7 +965,17 @@ def _render_session_submission_summary(
         if int(validation_frame["Count"].sum()) == 0:
             st.info("No validation statuses are available to chart.")
         else:
-            st.bar_chart(validation_frame)
+            render_chart(
+                validation_frame,
+                ChartSpec(
+                    "Current submission validation status",
+                    "Validation status",
+                    "Current submissions (count)",
+                    f"Session {session_id} · Current roster",
+                    "Each current submission has one displayed validation status.",
+                    integer=True,
+                ),
+            )
         attempts = pd.DataFrame(
             {
                 "Attempt count": {
@@ -1077,16 +990,21 @@ def _render_session_submission_summary(
         if int(attempts["Attempt count"].sum()) == 0:
             st.info("No submission attempts are available to chart.")
         else:
-            st.bar_chart(attempts, horizontal=True)
+            render_chart(
+                attempts,
+                ChartSpec(
+                    "Submission attempts by lifecycle status",
+                    "Attempt status",
+                    "Attempts (count)",
+                    f"Session {session_id} · All attempts",
+                    "Resubmission counts overlap these lifecycle categories.",
+                    horizontal=True,
+                    integer=True,
+                ),
+            )
         st.caption(
             "Resubmission attempts (overlaps the lifecycle categories): "
             f"{total('resubmission_attempt_count') if total else 0}."
-        )
-        _render_validation_command(
-            context,
-            session_id,
-            overview,
-            read_only=read_only,
         )
 
 
@@ -1113,11 +1031,12 @@ def _render_validation_command(
         "Create a new immutable validation run for the frozen roster.",
         key=f"processing:validate_confirm:{session_id}",
     )
-    if st.button(
+    if process_button(
         "Retry / validate current submissions"
         if overview.error_count
         else "Validate current submissions",
-        type="primary",
+        description="Begin Process · Validate the current frozen submissions.",
+        next_step="Weight Generation when validation and required reviews are complete",
         icon=":material/fact_check:",
         disabled=overview.active_count > 0 or not confirmation,
         key=f"processing:validate:{session_id}",
@@ -1135,11 +1054,17 @@ def _render_validation_command(
                     )
                 )
         except ValueError as error:
-            st.error(str(error), icon=":material/error:")
+            fail_process(f"processing:validate:{session_id}", str(error))
         else:
             st.session_state[receipt_key] = asdict(result)
-            st.session_state["processing:selected_run"] = result.processing_run_id
-            st.session_state["processing:viewed_stage"] = 2
+            st.session_state[f"processing:selected_run:{session_id}"] = (
+                result.processing_run_id
+            )
+            record_completion(
+                session_id,
+                1,
+                f"Validation run {result.run_number} saved. {result.valid} valid, {result.warned} warned, {result.error} errors. Resolve required decisions before continuing.",
+            )
             st.rerun()
 
 
@@ -1314,7 +1239,11 @@ def _render_exact_review(
             st.error(str(error), icon=":material/error:")
         else:
             st.success("Exact validation decision recorded.")
-            st.session_state["processing:viewed_stage"] = 2
+            record_completion(
+                detail.summary.session_id,
+                1,
+                "Validation decision saved. Progress will advance when all required reviews are complete.",
+            )
             st.rerun()
 
 
@@ -1341,7 +1270,9 @@ def _render_weight_generation_stage(
         key=f"processing:weight_run:{detail.summary.session_id}",
     )
     selected = next(run for run in runs if run.processing_run_id == selected_id)
-    st.session_state["processing:selected_run"] = selected.processing_run_id
+    st.session_state[f"processing:selected_run:{detail.summary.session_id}"] = (
+        selected.processing_run_id
+    )
     configuration = detail.configuration
     st.dataframe(
         [
@@ -1389,10 +1320,12 @@ def _render_weight_generation_stage(
             st.markdown(f"- {blocker}")
     if read_only:
         st.info("Weight generation is unavailable in read-only inspection mode.")
-    elif selected.status == RunStatus.AWAITING_REVIEW and st.button(
+    elif selected.status == RunStatus.AWAITING_REVIEW and process_button(
         "Generate weights",
         icon=":material/weight:",
-        type="primary",
+        description="Begin Process · Generate weights from the validated evidence.",
+        next_step="Create Ranking",
+        blockers=blockers,
         disabled=not can_generate,
         key=f"processing:generate_weights:{selected.processing_run_id}",
     ):
@@ -1408,13 +1341,21 @@ def _render_weight_generation_stage(
                     )
                 )
             except ValueError as error:
-                st.error(str(error), icon=":material/error:")
+                fail_process(
+                    f"processing:generate_weights:{selected.processing_run_id}",
+                    str(error),
+                )
             else:
                 st.success(
                     f"Generated weights for {result.included_submissions} "
                     "included submission(s)."
                 )
-                st.session_state["processing:viewed_stage"] = 3
+                record_completion(
+                    detail.summary.session_id,
+                    2,
+                    f"Weights generated for {result.included_submissions} included submissions.",
+                    evidence_id=selected.processing_run_id,
+                )
                 st.rerun()
     with st.expander("Deterministic execution details", expanded=False):
         st.json(
@@ -1460,7 +1401,9 @@ def _render_weight_generation_stage(
     try:
         matrices = context.queries.list_run_matrices(selected.processing_run_id)
     except PageQueryError as error:
-        st.error(str(error), icon=":material/error:")
+        fail_process(
+            f"processing:generate_weights:{selected.processing_run_id}", str(error)
+        )
     else:
         _render_matrix_browser(
             matrices,
@@ -1596,7 +1539,7 @@ def _render_matrix_level(
         columns=selected.criterion_labels,
     )
     st.dataframe(frame, width="stretch")
-    weights: dict[str, float] = {}
+    weights: dict[str, float | None] = {}
     invalid_weight_labels: list[str] = []
     for label, weight in zip(
         selected.criterion_labels,
@@ -1604,13 +1547,26 @@ def _render_matrix_level(
         strict=True,
     ):
         if weight is None:
+            weights[label] = None
             continue
         try:
             weights[label] = float(weight)
         except (TypeError, ValueError):
+            weights[label] = None
             invalid_weight_labels.append(label)
     if weights:
-        st.bar_chart(pd.Series(weights, name="Weight"), horizontal=True)
+        render_chart(
+            pd.Series(weights, name="Weight"),
+            ChartSpec(
+                "Criterion weights",
+                "Criterion",
+                "Normalized weight (%)",
+                f"{selected.label} · {level.replace('_', ' ')} · Matrix {selected.matrix_id}",
+                "Weights describe relative criterion importance within the selected evidence scope.",
+                horizontal=True,
+                scale="percent",
+            ),
+        )
     if invalid_weight_labels:
         st.warning(
             "Some persisted weights could not be charted: "
@@ -1802,11 +1758,12 @@ def _render_ranking_stage(
             st.markdown(f"- {blocker}")
     if read_only:
         st.info("Ranking generation is unavailable in read-only inspection mode.")
-    elif st.button(
+    elif process_button(
         "Generate rankings",
         icon=":material/leaderboard:",
-        type="primary",
-        disabled=bool(blockers),
+        description="Begin Process · Rank alternatives using the selected weights.",
+        next_step="Sensitivity and Robustness",
+        blockers=blockers,
         key=f"processing:generate_ranking:{detail.summary.session_id}",
     ):
         actor_id = context.principal.subject
@@ -1825,19 +1782,32 @@ def _render_ranking_stage(
                         )
                     )
             except CreateRankingError as error:
-                st.error(str(error), icon=":material/error:")
+                fail_process(
+                    f"processing:generate_ranking:{detail.summary.session_id}",
+                    str(error),
+                )
             else:
-                st.session_state["processing:ranking_feedback"] = {
+                st.session_state[
+                    f"processing:ranking_feedback:{detail.summary.session_id}"
+                ] = {
                     "status": result.status.value,
                     "run_number": result.run_number,
                     "reused": result.reused,
                     "result_count": result.result_count,
                     "failure_detail": result.failure_detail,
                 }
-                st.session_state["processing:viewed_stage"] = 3
+                if result.status == RunStatus.SUCCEEDED:
+                    record_completion(
+                        detail.summary.session_id,
+                        3,
+                        f"Ranking run {result.run_number} completed. {'Reused matching evidence.' if result.reused else ''}",
+                        evidence_id=result.ranking_run_id,
+                    )
                 st.rerun()
 
-    feedback = st.session_state.pop("processing:ranking_feedback", None)
+    feedback = st.session_state.pop(
+        f"processing:ranking_feedback:{detail.summary.session_id}", None
+    )
     if isinstance(feedback, Mapping):
         if feedback.get("status") == RunStatus.SUCCEEDED.value:
             reused_text = (
@@ -1870,7 +1840,17 @@ def _render_ranking_stage(
             ]
         ).set_index("Stakeholder group")
         st.dataframe(group_frame, width="stretch")
-        st.bar_chart(group_frame[["Configured voting power"]])
+        render_chart(
+            group_frame[["Configured voting power"]],
+            ChartSpec(
+                "Configured voting allocation by stakeholder group",
+                "Stakeholder group",
+                "Configured allocation (%)",
+                f"Session {detail.summary.session_id} · Frozen configuration",
+                "Voting allocation is configured independently of participant counts.",
+                scale="percent",
+            ),
+        )
 
     if selected_source is not None:
         try:
@@ -2033,7 +2013,24 @@ def _render_ranking_result_browser(
         except (TypeError, ValueError):
             chart_values = pd.Series(dtype=float)
         if not chart_values.empty:
-            st.bar_chart(chart_values, horizontal=True)
+            render_chart(
+                chart_values,
+                ChartSpec(
+                    "Alternative ranking scores",
+                    "Alternative",
+                    f"{selected_result.metric_label} (dimensionless)",
+                    f"{level.replace('_', ' ')} · Ranking result {selected_result.ranking_result_id}",
+                    (
+                        "Higher TOPSIS closeness coefficients indicate greater preference; scores range from 0 to 1."
+                        if selected_result.metric_label == "Closeness coefficient"
+                        else "Scores use the selected ranking method's metric; compare within this evidence scope."
+                    ),
+                    horizontal=True,
+                    scale="score"
+                    if selected_result.metric_label == "Closeness coefficient"
+                    else "number",
+                ),
+            )
         details = metric_row(
             4, key=f"processing:_render_ranking_result_browser:0:{key}"
         )

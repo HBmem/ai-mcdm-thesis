@@ -6,6 +6,7 @@ from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from poli_insight.application.use_cases.result_package_exports import _json_bytes
+from poli_insight.application.use_cases.deterministic_audit_renderer import deterministic_audit_export_html
 from poli_insight.domain.reporting import SharedReport
 
 
@@ -110,7 +111,7 @@ def report_zip(report: SharedReport) -> bytes:
     }
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
-        archive.writestr("report.html", report_html(report))
+        archive.writestr("report.html", deterministic_audit_export_html(report))
         archive.writestr("manifest.json", _json_bytes(manifest))
         for name, evidence in report.evidence.items():
             archive.writestr(f"evidence/{name}.json", _json_bytes(evidence))

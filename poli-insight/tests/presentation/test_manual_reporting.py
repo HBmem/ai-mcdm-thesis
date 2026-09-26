@@ -178,7 +178,11 @@ def test_report_actions_open_focused_dialogs(study):  # noqa: F811
     _button(app, "Go to Report Publication").click().run()
     _button(app, "Export report").click().run()
     assert not app.exception
-    assert len(app.get("download_button")) == 2
+    assert {item.proto.label for item in app.get("download_button")} == {
+        "Export report HTML",
+        "Export deterministic audit report HTML",
+        "Export report and evidence",
+    }
     assert (
         container.reporting.history(ADMIN, report.report_id)["revisions"][0] == revision
     )

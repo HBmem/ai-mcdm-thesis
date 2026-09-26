@@ -464,6 +464,14 @@ class RunSelectedAnalyses:
     def _input_manifest(context, method, parameters):
         return {
             "schema_version": 1,
+            **(
+                {
+                    "method_revision": 2,
+                    "required_group_handling": "counterfactual_omission_allowed",
+                }
+                if method == AnalysisMethod.STAKEHOLDER_GROUP_INFLUENCE
+                else {}
+            ),
             "method": method.value,
             "parameters": parameters,
             "session_id": context.ranking.session_id,
@@ -786,18 +794,7 @@ class RunSelectedAnalyses:
             remaining = {
                 key: value for key, value in group_matrices.items() if key != omitted
             }
-            if group.group_key in required:
-                case = self._not_evaluable(
-                    run_id,
-                    sequence,
-                    "session",
-                    None,
-                    "stakeholder_group",
-                    omitted,
-                    "analysis.required_group_removal",
-                    input_json=case_input,
-                )
-            elif not remaining:
+            if not remaining:
                 case = self._not_evaluable(
                     run_id,
                     sequence,
@@ -806,6 +803,17 @@ class RunSelectedAnalyses:
                     "stakeholder_group",
                     omitted,
                     "analysis.no_groups_remain",
+                    input_json=case_input,
+                )
+            elif sum(groups[key].allocation_units for key in remaining) <= 0:
+                case = self._not_evaluable(
+                    run_id,
+                    sequence,
+                    "session",
+                    None,
+                    "stakeholder_group",
+                    omitted,
+                    "analysis.nonpositive_remaining_allocation",
                     input_json=case_input,
                 )
             else:

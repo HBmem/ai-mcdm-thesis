@@ -12,6 +12,9 @@ from poli_insight.application.use_cases.create_ranking import CreateRankingComma
 from poli_insight.application.use_cases.create_result_package import (
     CreateResultPackageCommand,
 )
+from poli_insight.application.use_cases.deterministic_audit_renderer import (
+    deterministic_audit_export_html,
+)
 from poli_insight.application.use_cases.enroll_participant import (
     EnrollParticipantCommand,
 )
@@ -51,7 +54,9 @@ from tests.integration.test_participation_flow import (
 ADMIN = Principal("report-admin", "Report moderator", frozenset({"admin"}))
 
 
-def seed_reporting(database_path: Path):
+def seed_reporting(
+    database_path: Path, *, analysis_method=AnalysisMethod.CRITERION_REMOVAL
+):
     container = _container(database_path)
     session_id, group_id = _open_questionnaire(
         container,
@@ -111,7 +116,7 @@ def seed_reporting(database_path: Path):
         RunSelectedAnalysesCommand(
             session_id,
             ranking.ranking_run_id,
-            (AnalysisTestSpec(AnalysisMethod.CRITERION_REMOVAL),),
+            (AnalysisTestSpec(analysis_method),),
             ADMIN.subject,
         )
     )
@@ -608,3 +613,57 @@ def test_reporting_overviews_and_previews_do_not_load_private_records_or_files(s
     )
     full = reader.preview(ADMIN, revision.revision_id)
     assert full.documents[0].content == b"Supporting text"
+
+
+def test_deterministic_export_renders_packaged_participant_influence(tmp_path):
+    container, _, package_id, enrolled = seed_reporting(
+        tmp_path / "participant-influence.sqlite",
+        analysis_method=AnalysisMethod.PARTICIPANT_INFLUENCE,
+    )
+    service = container.reporting
+    report = service.create_report(
+        ADMIN, package_run_id=package_id, title="Participant influence audit"
+    )
+    revision = service.history(ADMIN, report.report_id)["revisions"][0]
+    projection = service.preview(ADMIN, revision.revision_id)
+    result = next(
+        result
+        for result in projection.evidence["06_analyses"]["selected_results"]
+        if result["method"] == "participant_influence"
+    )
+    assert len(result["cases"]) == 3
+    for case in result["cases"]:
+        assert case["status"] == "evaluated"
+        assert case["subject_id"] is None
+        assert "omitted_participant_id" not in case["input"]
+        assert case["result"]["session_metrics"]
+        assert case["result"]["session_ranking"]
+        assert case["result"]["group_metrics"]
+        assert case["result"]["group_ranking"]
+    summary = result["summary"]["summary"]
+    assert summary["evaluated_count"] == 3
+    assert summary["effect_distribution"][
+        "session_maximum_rank_displacement_counts"
+    ] == {"0": 3}
+
+    html = deterministic_audit_export_html(projection).decode("utf-8")
+    section = html.split("<h3>Participant Influence</h3>", 1)[1].split("</section>", 1)[
+        0
+    ]
+    assert (
+        '<div class="definition-label">Evaluated cases</div><div class="definition-value">3</div>'
+        in section
+    )
+    assert "<caption>Session rank displacement distribution</caption>" in section
+    assert "<tbody><tr><td>0</td><td>3</td></tr></tbody>" in section
+    assert "No data recorded" not in section
+    assert "Individual participant cases are included in Appendix B" in section
+    assert (
+        html.index('id="analyses"')
+        < html.index("<h3>Participant Influence</h3>")
+        < html.index('id="provenance"')
+    )
+    assert "Session and stakeholder-group results" in html
+    assert "Private respondent" not in html
+    for participant in enrolled:
+        assert participant.participant_id not in html

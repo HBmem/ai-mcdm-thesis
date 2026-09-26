@@ -4,7 +4,6 @@ import ast
 import unittest
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOTS = (
     PROJECT_ROOT / "src" / "poli_insight",
@@ -13,10 +12,10 @@ PYTHON_ROOTS = (
 )
 
 
-def _is_identity_singleton(node: ast.expr) -> bool:
+def _is_identity_singleton(node: ast.expr, sentinels: set[str]) -> bool:
     if isinstance(node, ast.Constant):
         return node.value is None or node.value is True or node.value is False
-    return isinstance(node, ast.Name) and node.id == "NotImplemented"
+    return isinstance(node, ast.Name) and node.id in {"NotImplemented", *sentinels}
 
 
 class IdentityComparisonTests(unittest.TestCase):
@@ -24,14 +23,23 @@ class IdentityComparisonTests(unittest.TestCase):
         self,
     ) -> None:
         violations: list[str] = []
-        paths = sorted(
-            path
-            for root in PYTHON_ROOTS
-            for path in root.rglob("*.py")
-        )
+        paths = sorted(path for root in PYTHON_ROOTS for path in root.rglob("*.py"))
         for path in paths:
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
+            # A module-level object() is an explicit identity sentinel too.
+            sentinels = {
+                target.id
+                for statement in tree.body
+                if isinstance(statement, ast.Assign)
+                if isinstance(statement.value, ast.Call)
+                and isinstance(statement.value.func, ast.Name)
+                and statement.value.func.id == "object"
+                and not statement.value.args
+                and not statement.value.keywords
+                for target in statement.targets
+                if isinstance(target, ast.Name)
+            }
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Compare):
                     continue
@@ -42,8 +50,8 @@ class IdentityComparisonTests(unittest.TestCase):
                     strict=True,
                 ):
                     if isinstance(operator, (ast.Is, ast.IsNot)) and not (
-                        _is_identity_singleton(left)
-                        or _is_identity_singleton(right)
+                        _is_identity_singleton(left, sentinels)
+                        or _is_identity_singleton(right, sentinels)
                     ):
                         relative_path = path.relative_to(PROJECT_ROOT)
                         violations.append(f"{relative_path}:{node.lineno}")

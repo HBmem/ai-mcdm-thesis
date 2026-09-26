@@ -112,6 +112,7 @@ def _open_questionnaire(
     response_format: ResponseFormat,
     consent_required: bool,
     scale_count: int | None = None,
+    stakeholder_groups: tuple[StakeholderGroupInput, ...] | None = None,
     access_code: str | None = None,
     enrollment_mode: EnrollmentMode = EnrollmentMode.OPEN,
     stakeholder_selection_mode: StakeholderSelectionMode = (
@@ -165,7 +166,7 @@ def _open_questionnaire(
             response_format=response_format,
             response_target_type=ResponseTargetType.CRITERION,
             scale_id=scale.scale_id,
-            stakeholder_groups=(
+            stakeholder_groups=stakeholder_groups or (
                 StakeholderGroupInput(
                     group_key="community",
                     name="Community members",

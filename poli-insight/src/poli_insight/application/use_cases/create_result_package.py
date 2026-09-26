@@ -17,7 +17,7 @@ from poli_insight.application.use_cases._operational_audit import (
 )
 from poli_insight.core.ids import new_id
 from poli_insight.core.time import utc_now
-from poli_insight.domain.analysis import AnalysisRun
+from poli_insight.domain.analysis import AnalysisCase, AnalysisRun
 from poli_insight.domain.content_hash import hash_json
 from poli_insight.domain.enum import (
     ActorType,
@@ -38,6 +38,8 @@ from poli_insight.domain.result_package import (
 )
 
 _PACKAGE_SCHEMA_VERSION = 1
+_AGGREGATE_PROJECTION_VERSION = 4
+_COMMON_SECTION_SCHEMA_VERSIONS = {"06_analyses": 2}
 _SMALL_GROUP_THRESHOLD = 3
 
 
@@ -156,6 +158,7 @@ class CreateResultPackage:
                     "application_version": _package_version("poli-insight"),
                     "python_version": python_version(),
                     "renderer_version": "deterministic-report-v1",
+                    "aggregate_projection_version": _AGGREGATE_PROJECTION_VERSION,
                 },
                 "created_at": now,
                 "created_by": command.actor_id,
@@ -194,7 +197,7 @@ class CreateResultPackage:
                             artifact_type=PackageArtifactType.COMMON_SECTION,
                             name=name,
                             sequence=sequence,
-                            schema_version=1,
+                            schema_version=_COMMON_SECTION_SCHEMA_VERSIONS.get(name, 1),
                             content_json=content,
                         )
                     )
@@ -211,6 +214,7 @@ class CreateResultPackage:
                         "name": item.name,
                         "content_hash": item.content_hash,
                         "sequence": item.sequence,
+                        "schema_version": item.schema_version,
                     }
                     for item in artifacts
                     if item.artifact_type == PackageArtifactType.COMMON_SECTION
@@ -221,9 +225,10 @@ class CreateResultPackage:
                 for variant in command.variants:
                     manifest: dict[str, object] = {
                         "schema_version": 1,
+                        "aggregate_projection_version": _AGGREGATE_PROJECTION_VERSION,
                         "variant": variant.value,
                         "privacy_label": (
-                            "aggregate-only anonymous"
+                            "anonymous with de-identified influence cases"
                             if variant == BundleVariant.ANONYMOUS
                             else "identity-linked controlled access"
                         ),
@@ -246,7 +251,7 @@ class CreateResultPackage:
                                 "participant identifiers and aliases",
                                 "submission and validation identifiers",
                                 "participant matrices and rankings",
-                                "individual participant influence cases",
+                                "participant identifiers in individual influence cases",
                                 "stored identity and access credentials",
                             ]
                             if variant == BundleVariant.ANONYMOUS
@@ -470,7 +475,7 @@ class CreateResultPackage:
     def _input_manifest(command, context) -> dict[str, object]:
         return {
             "schema_version": 1,
-            "aggregate_projection_version": 2,
+            "aggregate_projection_version": _AGGREGATE_PROJECTION_VERSION,
             "session_id": command.session_id,
             "processing": {
                 "id": context["processing"].processing_run_id,
@@ -560,25 +565,49 @@ class CreateResultPackage:
                     ),
                     None,
                 )
+                case_status_counts = Counter(
+                    item.status.value for item in selected.cases
+                )
+                case_warning_counts = Counter(
+                    warning
+                    for item in selected.cases
+                    for warning in item.warnings
+                )
+                ordered_cases = tuple(
+                    sorted(selected.cases, key=lambda item: item.sequence)
+                )
+
                 result: dict[str, object] = {
                     "method": method.value,
+                    "analysis_type": selected.analysis_type.value,
                     "analysis_run_id": selected.analysis_run_id,
                     "input_hash": selected.input_hash,
                     "output_hash": selected.output_hash,
                     "parameters": dict(selected.parameter_json),
+                    "case_count": len(selected.cases),
+                    "case_status_counts": dict(sorted(case_status_counts.items())),
+                    "warning_counts": dict(sorted(case_warning_counts.items())),
                     "summary": (
                         dict(safe_artifact.content_json)
                         if safe_artifact is not None
                         else {}
                     ),
+                    "summary_artifact_hash": (
+                        None if safe_artifact is None else safe_artifact.content_hash
+                    ),
                     "structured_result_hash": (
                         None if structured is None else structured.content_hash
                     ),
                 }
-                if method != AnalysisMethod.PARTICIPANT_INFLUENCE:
+                if method == AnalysisMethod.PARTICIPANT_INFLUENCE:
+                    result["cases"] = [
+                        _participant_influence_case_manifest(item)
+                        for item in ordered_cases
+                    ]
+                else:
                     result["cases"] = [
                         item.to_manifest()
-                        for item in selected.cases
+                        for item in ordered_cases
                         if item.scope_type != "participant"
                     ]
                 analysis_results.append(result)
@@ -737,7 +766,7 @@ class CreateResultPackage:
                 ],
             },
             "06_analyses": {
-                "schema_version": 1,
+                "schema_version": _COMMON_SECTION_SCHEMA_VERSIONS["06_analyses"],
                 "completeness": analysis_completeness,
                 "selected_results": analysis_results,
             },
@@ -758,7 +787,12 @@ class CreateResultPackage:
                             "artifact_type": item.artifact_type.value,
                             "content_hash": item.content_hash,
                         }
-                        for item in processing.artifacts
+                        for item in sorted(
+                            processing.artifacts,
+                            key=lambda value: (
+                                value.artifact_type.value, value.run_artifact_id
+                            ),
+                        )
                     ],
                     "ranking": [
                         {
@@ -766,7 +800,12 @@ class CreateResultPackage:
                             "artifact_type": item.artifact_type.value,
                             "content_hash": item.content_hash,
                         }
-                        for item in ranking.artifacts
+                        for item in sorted(
+                            ranking.artifacts,
+                            key=lambda value: (
+                                value.artifact_type.value, value.ranking_artifact_id
+                            ),
+                        )
                     ],
                     "analyses": [
                         {
@@ -777,7 +816,13 @@ class CreateResultPackage:
                                     "artifact_type": item.artifact_type.value,
                                     "content_hash": item.content_hash,
                                 }
-                                for item in analysis.artifacts
+                                for item in sorted(
+                                    analysis.artifacts,
+                                    key=lambda value: (
+                                        value.artifact_type.value,
+                                        value.analysis_artifact_id,
+                                    ),
+                                )
                             ],
                         }
                         for analysis in analyses
@@ -1070,3 +1115,132 @@ def _effective_group_powers(
                 group_id: power / total for group_id, power in effective.items()
             }
     return effective
+
+
+def _participant_influence_case_manifest(case: AnalysisCase) -> dict[str, object]:
+    """Project participant influence into the shared analysis-case contract.
+
+    Participant influence produces two deterministic effect scopes: the
+    participant's stakeholder-group reranking and the final session reranking.
+    The shared package uses the session effect as the primary ``metrics`` /
+    ``ranking`` pair so generic analysis consumers can render it consistently,
+    while retaining the stakeholder-group effect as an explicit secondary block.
+
+    Participant identity fields are removed from the shared projection. The
+    original source case hash is retained so the de-identified projection can
+    still be traced back to immutable source evidence.
+    """
+    manifest = case.to_manifest()
+    source_content_hash = manifest.pop("content_hash")
+
+    # The participant is the subject of the counterfactual. Do not expose either
+    # subject_id or participant-scoped scope_id in a shared package.
+    manifest["subject_id"] = None
+    if str(manifest.get("scope_type", "")).casefold() == "participant":
+        manifest["scope_id"] = None
+
+    inputs = _strip_participant_identity_fields(dict(case.input_json))
+    source_result = _strip_participant_identity_fields(dict(case.result_json))
+
+    session_metrics = _json_mapping(source_result.get("session_metrics"))
+    session_ranking = _json_sequence(source_result.get("session_ranking"))
+    session_diagnostics = _json_mapping(
+        source_result.get("session_weighting_diagnostics")
+    )
+
+    group_metrics = _json_mapping(source_result.get("group_metrics"))
+    group_ranking = _json_sequence(source_result.get("group_ranking"))
+    group_diagnostics = _json_mapping(
+        source_result.get("group_weighting_diagnostics")
+    )
+
+    if case.status.value == "evaluated" and (not session_metrics or not session_ranking):
+        raise CreateResultPackageError(
+            "An evaluated participant-influence case is missing session metrics or ranking evidence."
+        )
+
+    # Normalize the primary session effect to the same result contract used by
+    # the other analysis methods.
+    projected_result: dict[str, object] = {
+        "primary_effect_scope": "session",
+        "metrics": session_metrics,
+        "ranking": session_ranking,
+        "weighting_diagnostics": session_diagnostics,
+        "stakeholder_group_effect": {
+            "metrics": group_metrics,
+            "ranking": group_ranking,
+            "weighting_diagnostics": group_diagnostics,
+        },
+    }
+
+    # Preserve future deterministic fields without flattening them into the
+    # primary contract. This prevents accidental evidence loss when the analysis
+    # implementation grows new fields.
+    known_result_keys = {
+        "session_metrics",
+        "session_ranking",
+        "session_weighting_diagnostics",
+        "group_metrics",
+        "group_ranking",
+        "group_weighting_diagnostics",
+    }
+    additional = {
+        key: value
+        for key, value in source_result.items()
+        if key not in known_result_keys
+    }
+    if additional:
+        projected_result["additional"] = additional
+
+    manifest["input"] = inputs
+    manifest["result"] = projected_result
+    manifest["projection_schema_version"] = 2
+
+    # Include the immutable source linkage in the projected case hash. As with
+    # AnalysisCase.content_hash, the hash is calculated before adding the
+    # content_hash field itself.
+    manifest["source_content_hash"] = source_content_hash
+    manifest["content_hash"] = hash_json(manifest)
+    return manifest
+
+
+_PARTICIPANT_IDENTITY_FIELDS = frozenset(
+    {
+        "participant_id",
+        "omitted_participant_id",
+        "subject_participant_id",
+        "participant_alias",
+        "alias_snapshot",
+        "submission_id",
+        "validation_id",
+    }
+)
+
+
+def _strip_participant_identity_fields(value: Any) -> Any:
+    """Recursively remove identity-bearing fields from shared participant evidence."""
+    if isinstance(value, Mapping):
+        cleaned: dict[Any, Any] = {}
+        for key, item in value.items():
+            normalized = str(key).strip().casefold().replace(" ", "_")
+            if normalized in _PARTICIPANT_IDENTITY_FIELDS:
+                continue
+            cleaned[key] = _strip_participant_identity_fields(item)
+        return cleaned
+    if isinstance(value, tuple):
+        return [_strip_participant_identity_fields(item) for item in value]
+    if isinstance(value, list):
+        return [_strip_participant_identity_fields(item) for item in value]
+    return value
+
+
+def _json_mapping(value: Any) -> dict[str, Any]:
+    """Return a mutable JSON-object projection without accepting arbitrary objects."""
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _json_sequence(value: Any) -> list[Any]:
+    """Return a JSON-array projection for list/tuple analysis evidence."""
+    if isinstance(value, (list, tuple)):
+        return [_strip_participant_identity_fields(item) for item in value]
+    return []

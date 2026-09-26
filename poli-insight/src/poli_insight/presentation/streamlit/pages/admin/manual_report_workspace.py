@@ -9,6 +9,10 @@ from poli_insight.domain.reporting import (
     EVIDENCE_SECTIONS,
     NARRATIVE_SECTIONS,
 )
+from poli_insight.presentation.streamlit.components.process_ui import (
+    admin_action_button,
+    admin_form_submit_button,
+)
 from poli_insight.presentation.streamlit.urls import public_report_url
 
 
@@ -117,7 +121,9 @@ def _upload_document_dialog(context, session_id, workspace):
             type=["pdf", "docx", "txt", "md"],
             max_upload_size=20,
         )
-        save = st.form_submit_button("Save document version")
+        save = admin_form_submit_button(
+            "Save document version", panel_key="manual_report_workspace:120"
+        )
     if save:
         if uploaded is None:
             st.error("Select a document to upload.")
@@ -227,7 +233,9 @@ def editor(context, package, report, workspace, *, show_create=True):
         summary = st.text_input(
             "Change summary", key=f"{prefix}:{base.revision_id}:summary"
         )
-        save = st.form_submit_button("Save new draft revision")
+        save = admin_form_submit_button(
+            "Save new draft revision", panel_key="manual_report_workspace:230"
+        )
     if save:
 
         def save_revision():
@@ -290,7 +298,9 @@ def editor(context, package, report, workspace, *, show_create=True):
         )
         with st.form(f"{prefix}:notes", clear_on_submit=True):
             note = st.text_area("New internal note")
-            add = st.form_submit_button("Add internal note")
+            add = admin_form_submit_button(
+                "Add internal note", panel_key="manual_report_workspace:293"
+            )
         if add:
             _action(
                 lambda: service.add_note(actor, report_id=report.report_id, body=note)
@@ -307,7 +317,9 @@ def create_report_dialog(context, package):
     )
     with st.form(f"reports:{package.package_run_id}:create"):
         title = st.text_input("Report title")
-        create = st.form_submit_button("Create report draft")
+        create = admin_form_submit_button(
+            "Create report draft", panel_key="manual_report_workspace:310"
+        )
     if create:
         _action(
             lambda: context.container.reporting.create_report(
@@ -376,7 +388,12 @@ def publish_dialog(context, revision, audience):
         f"Publish revision {revision.number} to {'session participants through their private links' if audience == 'participant' else 'the public catalog and a shareable link'}."
     )
     confirmed = st.checkbox("I authorize publication of this exact revision.")
-    if st.button("Confirm publication", disabled=not confirmed, type="primary"):
+    if admin_action_button(
+        "Confirm publication",
+        disabled=not confirmed,
+        type="primary",
+        panel_key="manual_report_workspace:379",
+    ):
         _action(
             lambda: context.container.reporting.publish(
                 context.principal, revision_id=revision.revision_id, audience=audience

@@ -258,7 +258,7 @@ def test_all_five_analysis_methods_produce_expected_cases() -> None:
     assert len(criterion) == 6
     assert len(reversal) == 9
     assert len(group) == 2
-    assert group[0].status == AnalysisCaseStatus.NOT_EVALUABLE
+    assert group[0].status == AnalysisCaseStatus.EVALUATED
     assert group[1].status == AnalysisCaseStatus.EVALUATED
     assert len(participant) == 3
     assert all(item.status == AnalysisCaseStatus.EVALUATED for item in participant)
@@ -365,3 +365,95 @@ def test_batch_isolates_failures_and_reuses_successful_inputs() -> None:
 
     assert cached.outcomes[0].reused is True
     assert len(unit_of_work.analysis_runs.runs) == 2
+
+
+def test_all_required_groups_are_evaluated_with_normalized_remaining_allocations():
+    from copy import deepcopy
+
+    from poli_insight.application.use_cases.finalize_validation_bundle import (
+        _weighted_geometric_matrices,
+    )
+
+    context = _context()
+    context.configuration.required_group_policy_json = {
+        "required_group_keys": ["required", "optional"]
+    }
+    before = deepcopy(context.configuration.required_group_policy_json)
+    with patch(
+        "poli_insight.application.use_cases.run_selected_analyses._weighted_geometric_matrices",
+        wraps=_weighted_geometric_matrices,
+    ) as aggregate:
+        cases = _service()._group_influence(context, {}, "required-run", 1, 1, None)
+    assert all(case.status == AnalysisCaseStatus.EVALUATED for case in cases)
+    assert aggregate.call_count == 2
+    for call in aggregate.call_args_list:
+        assert sum(call.args[1].values()) == Decimal(1)
+        assert len(call.args[0]) == 1
+    assert context.configuration.required_group_policy_json == before
+    assert cases[0].input_json["required_group_keys"] == ["optional", "required"]
+
+
+def test_group_omission_preserves_not_evaluable_mathematical_boundaries():
+    context = _context()
+    context.configuration.stakeholder_groups[1].allocation_units = 0
+    cases = _service()._group_influence(context, {}, "zero-run", 1, 1, None)
+    assert cases[0].status == AnalysisCaseStatus.NOT_EVALUABLE
+    assert cases[0].result_json["reason"] == "analysis.nonpositive_remaining_allocation"
+    assert cases[1].status == AnalysisCaseStatus.EVALUATED
+    context.source.matrices = tuple(
+        m for m in context.source.matrices if m.stakeholder_group_id != "g2"
+    )
+    cases = _service()._group_influence(context, {}, "single-run", 1, 1, None)
+    assert len(cases) == 1
+    assert cases[0].result_json["reason"] == "analysis.no_groups_remain"
+
+
+def test_participant_omission_still_cannot_empty_a_required_group():
+    context = _context()
+    context.source.submissions = tuple(
+        s for s in context.source.submissions if s.participant_id != "participant-2"
+    )
+    cases = _service()._participant_influence(
+        context, {}, "participant-run", 1, 1, None
+    )
+    assert cases[0].status == AnalysisCaseStatus.NOT_EVALUABLE
+    assert cases[0].result_json["reason"] == "analysis.required_group_would_be_empty"
+    assert cases[1].status == AnalysisCaseStatus.EVALUATED
+
+
+def test_group_method_revision_does_not_reuse_legacy_but_reuses_new_results():
+    context = _context()
+    unit_of_work = _UnitOfWork()
+    identifiers = count(1)
+    service = RunSelectedAnalyses(
+        lambda: unit_of_work,
+        None,
+        None,
+        id_factory=lambda: f"revision-{next(identifiers)}",
+    )
+    command = RunSelectedAnalysesCommand(
+        "session-1",
+        "ranking-1",
+        (AnalysisTestSpec(AnalysisMethod.STAKEHOLDER_GROUP_INFLUENCE),),
+        "admin-1",
+    )
+    manifest = service._input_manifest
+
+    def legacy_manifest(*args):
+        value = manifest(*args)
+        value.pop("method_revision", None)
+        value.pop("required_group_handling", None)
+        return value
+
+    with patch.object(service, "_context", return_value=context):
+        with patch.object(service, "_input_manifest", side_effect=legacy_manifest):
+            legacy = service.execute(command)
+        revised = service.execute(command)
+        repeated = service.execute(command)
+    assert legacy.outcomes[0].analysis_run_id != revised.outcomes[0].analysis_run_id
+    assert not revised.outcomes[0].reused
+    assert repeated.outcomes[0].reused
+    assert repeated.outcomes[0].analysis_run_id == revised.outcomes[0].analysis_run_id
+    assert "method_revision" not in manifest(
+        context, AnalysisMethod.PARTICIPANT_INFLUENCE, {}
+    )

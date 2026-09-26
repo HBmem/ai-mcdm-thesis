@@ -27,6 +27,15 @@ from poli_insight.domain.enum import (
     ArtifactType,
     RunStatus,
 )
+from poli_insight.presentation.streamlit.components.analysis_tests import (
+    TEST_DEFINITIONS,
+    render_metric_guide,
+    render_test_explanation,
+)
+from poli_insight.presentation.streamlit.components.charts import (
+    ChartSpec,
+    render_chart,
+)
 from poli_insight.presentation.streamlit.components.layout import (
     AdminSurfaceVariant,
     admin_surface,
@@ -34,6 +43,15 @@ from poli_insight.presentation.streamlit.components.layout import (
     metric_row,
     render_section_heading,
     surface,
+)
+from poli_insight.presentation.streamlit.components.process_ui import (
+    fail_process,
+    process_button,
+)
+from poli_insight.presentation.streamlit.components.workflow import (
+    evaluated_cases,
+    record_completion,
+    workflow_key,
 )
 from poli_insight.presentation.streamlit.context import PageContext
 
@@ -59,7 +77,9 @@ def render_analysis_stage(
     if not successful:
         st.warning("A successful persisted ranking is required before analysis.")
         return
-    latest_id = successful[0].ranking_run_id
+    latest_id = st.session_state.get(
+        workflow_key(detail.summary.session_id, "ranking"), successful[0].ranking_run_id
+    )
     timezone_name = getattr(
         getattr(context.container, "settings", None), "app_timezone", "UTC"
     )
@@ -88,15 +108,17 @@ def render_analysis_stage(
             return
 
         render_section_heading("Select tests", level=3)
-        columns = st.columns(2)
         methods = []
-        for position, method in enumerate(AnalysisMethod):
-            if columns[position % 2].checkbox(
-                method_label(method),
-                value=False,
-                key=f"processing:analysis_test:{detail.summary.session_id}:{method.value}",
-            ):
-                methods.append(method)
+        for method in AnalysisMethod:
+            with st.container(border=True):
+                chosen = st.checkbox(
+                    method_label(method),
+                    value=False,
+                    key=f"processing:analysis_test:{detail.summary.session_id}:{method.value}",
+                )
+                render_test_explanation(method, expanded=chosen)
+                if chosen:
+                    methods.append(method)
         perturbation = _perturbation_configuration(
             detail.summary.session_id,
             AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION in methods,
@@ -161,7 +183,7 @@ def render_analysis_stage(
                 )
             st.caption(
                 f"Estimated {case_count} counterfactual cases. Some cases may be "
-                "recorded as not evaluable under the frozen group policy."
+                "recorded as not evaluable when valid inputs cannot remain after removal. Required groups are included in group influence tests."
             )
             if AnalysisMethod.CRITERION_REMOVAL in methods and criteria < 2:
                 st.warning(
@@ -191,11 +213,12 @@ def render_analysis_stage(
             blockers.append("Confirm the estimated large workload.")
         if read_only:
             blockers.append("Analysis execution is unavailable in read-only mode.")
-        if st.button(
+        if process_button(
             "Run selected tests",
             icon=":material/query_stats:",
-            type="primary",
-            disabled=bool(blockers),
+            description=f"Begin Process · {len(methods)} selected tests · approximately {case_count} cases and {evaluation_count} ranking evaluations.",
+            blockers=blockers,
+            next_step="Package Results when every selected test succeeds with evaluated evidence",
             key=f"processing:run_analyses:{detail.summary.session_id}",
         ):
             _execute(
@@ -207,13 +230,19 @@ def render_analysis_stage(
             )
         for blocker in blockers:
             st.caption(f"• {blocker}")
-    feedback = st.session_state.pop("processing:analysis_feedback", None)
-    if isinstance(feedback, Mapping):
+    feedback = st.session_state.get(
+        f"processing:analysis_feedback:{detail.summary.session_id}"
+    )
+    if isinstance(feedback, Mapping) and feedback.get("ranking_id") == selected_id:
         failures = int(feedback.get("failures", 0))
         if failures:
             st.error(
                 f"Completed {feedback.get('completed', 0)} test(s); "
                 f"{failures} failed. Inspect the result tabs."
+            )
+        elif feedback.get("empty", 0):
+            st.warning(
+                "Some selected tests produced no evaluable cases. Review their reasons before continuing."
             )
         else:
             st.success(
@@ -226,6 +255,21 @@ def render_analysis_stage(
             history = history_service.execute(detail.summary.session_id)
         except ValueError as error:
             st.error(str(error), icon=":material/error:")
+    eligible = [
+        run
+        for run in history
+        if run.source_ranking_run_id == selected_id
+        and run.status == RunStatus.SUCCEEDED
+        and evaluated_cases(run) > 0
+    ]
+    if eligible and selected_id == latest_id and not read_only:
+        if st.button(
+            "Continue to Package Results with successful evidence",
+            key=f"processing:analysis_continue:{detail.summary.session_id}",
+        ):
+            st.session_state[workflow_key(detail.summary.session_id, "viewed")] = 5
+            st.rerun()
+    render_metric_guide()
     with surface(key="analysis:results"):
         _results(context, tuple(history), selected_id, detail.summary.session_id)
 
@@ -252,19 +296,19 @@ def _perturbation_configuration(session_id: str, selected: bool) -> dict[str, De
         if preset != "Advanced":
             lower, upper, step = presets[preset]
             st.caption(
-                f"Baseline −{lower} to +{upper} weight points in {step} "
-                "increments, clipped to 0–1."
+                f"Baseline −{lower * 100:g} to +{upper * 100:g} percentage points in {step * 100:g} "
+                "percentage-point increments, clipped to 0–100%."
             )
         else:
             controls = st.columns(3)
             lower = Decimal(
                 str(
                     controls[0].number_input(
-                        "Lower delta",
+                        "Lower delta (percentage points)",
                         0.0,
+                        100.0,
+                        20.0,
                         1.0,
-                        0.20,
-                        0.01,
                         key=f"processing:perturb_lower:{session_id}",
                     )
                 )
@@ -272,11 +316,11 @@ def _perturbation_configuration(session_id: str, selected: bool) -> dict[str, De
             upper = Decimal(
                 str(
                     controls[1].number_input(
-                        "Upper delta",
+                        "Upper delta (percentage points)",
                         0.0,
+                        100.0,
+                        20.0,
                         1.0,
-                        0.20,
-                        0.01,
                         key=f"processing:perturb_upper:{session_id}",
                     )
                 )
@@ -284,16 +328,17 @@ def _perturbation_configuration(session_id: str, selected: bool) -> dict[str, De
             step = Decimal(
                 str(
                     controls[2].number_input(
-                        "Step",
-                        0.001,
-                        0.10,
-                        0.01,
-                        0.001,
-                        format="%.3f",
+                        "Step (percentage points)",
+                        0.1,
+                        10.0,
+                        1.0,
+                        0.1,
+                        format="%.1f",
                         key=f"processing:perturb_step:{session_id}",
                     )
                 )
             )
+            lower, upper, step = lower / 100, upper / 100, step / 100
         st.info(
             "One criterion changes at a time. Remaining weight is redistributed "
             "proportionally before the configured ranking method is rerun."
@@ -400,17 +445,33 @@ def _execute(context, session_id, ranking_id, methods, perturbation):
             )
         except RunSelectedAnalysesError as error:
             status.update(label="Analysis could not start", state="error")
-            st.error(str(error), icon=":material/error:")
+            fail_process(f"processing:run_analyses:{session_id}", str(error))
             return
         failures = sum(item.status == RunStatus.FAILED for item in result.outcomes)
         status.update(
             label="Selected analyses complete",
             state="error" if failures else "complete",
         )
-        st.session_state["processing:analysis_feedback"] = {
+        empty = sum(item.evaluated_cases == 0 for item in result.outcomes)
+        not_evaluable = sum(item.not_evaluable_cases for item in result.outcomes)
+        st.session_state[f"processing:analysis_feedback:{session_id}"] = {
             "completed": len(result.outcomes),
             "failures": failures,
+            "empty": empty,
+            "ranking_id": ranking_id,
         }
+        record_completion(
+            session_id,
+            4,
+            f"Selected analyses finished: {len(result.outcomes) - failures} succeeded, {failures} failed, {sum(item.evaluated_cases for item in result.outcomes)} cases evaluated, {not_evaluable} not evaluable."
+            + (
+                " Review the incomplete evidence before continuing."
+                if failures or empty
+                else " Review results for warnings and interpretation."
+            ),
+            evidence_id=ranking_id,
+            advance=not failures and not empty,
+        )
     st.rerun()
 
 
@@ -419,7 +480,7 @@ def _results(context, runs, selected_ranking_id: str, session_id: str) -> None:
     tabs = st.tabs(tuple(method_label(method) for method in AnalysisMethod))
     for tab, method in zip(tabs, AnalysisMethod, strict=True):
         with tab:
-            st.info(method_explanation(method))
+            render_test_explanation(method)
             matching = tuple(
                 run
                 for run in runs
@@ -445,6 +506,23 @@ def _results(context, runs, selected_ranking_id: str, session_id: str) -> None:
                 key=f"processing:analysis_history:{session_id}:{method.value}",
             )
             run = next(item for item in matching if item.analysis_run_id == selected)
+            if method == AnalysisMethod.STAKEHOLDER_GROUP_INFLUENCE:
+                manifest = next(
+                    (
+                        artifact.content_json
+                        for artifact in run.artifacts
+                        if artifact.artifact_type == ArtifactType.INPUT_MANIFEST
+                    ),
+                    {},
+                )
+                if manifest.get("method_revision", 1) < 2:
+                    st.warning(
+                        "Legacy methodology: this run skipped required-group omissions. Run this test again to include required groups."
+                    )
+                else:
+                    st.caption(
+                        "Method revision 2 · Required groups included as hypothetical omissions."
+                    )
             if run.status == RunStatus.FAILED:
                 st.error(run.failure_detail or "This analysis run failed.")
                 with st.expander("Failure provenance"):
@@ -672,7 +750,9 @@ def _render_level_summary(context, run, *, level, group_id):
     elif summary.top_set_change_count or summary.strict_reversal_count:
         st.warning("Instability was observed at this result level.")
     else:
-        st.success("No instability was observed at this result level.")
+        st.success(
+            "No instability observed in the evaluated cases at this result level."
+        )
     if summary.displacement_distribution:
         frame = pd.DataFrame(
             [
@@ -680,7 +760,17 @@ def _render_level_summary(context, run, *, level, group_id):
                 for displacement, count in summary.displacement_distribution.items()
             ]
         ).set_index("Maximum rank displacement")
-        st.bar_chart(frame)
+        render_chart(
+            frame,
+            ChartSpec(
+                "Distribution of maximum ranking changes",
+                "Maximum rank displacement (positions)",
+                "Evaluated cases (count)",
+                f"{level.replace('_', ' ')} · {group_id or 'Session'} · Analysis run {run.run_number}",
+                "Counts include evaluated cases only; not-evaluable cases are excluded.",
+                integer=True,
+            ),
+        )
     return summary
 
 
@@ -743,15 +833,26 @@ def _case_page(context, run, method, level, group_id):
             chart.append(
                 {
                     "Subject": item.subject_label,
-                    "Maximum rank displacement": float(
-                        metrics.get("maximum_rank_displacement", 0)
+                    "Maximum rank displacement": metrics.get(
+                        "maximum_rank_displacement"
                     ),
                 }
             )
     if rows:
         st.dataframe(rows, hide_index=True, width="stretch")
     if chart and method != AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION:
-        st.bar_chart(pd.DataFrame(chart).set_index("Subject"), horizontal=True)
+        render_chart(
+            pd.DataFrame(chart).set_index("Subject"),
+            ChartSpec(
+                "Maximum ranking change after each omission",
+                "Omitted subject",
+                "Maximum rank displacement (positions)",
+                f"{method_label(method)} · {level.replace('_', ' ')} · Analysis run {run.run_number} · Page {result.page} of {max(1, result.page_count)}",
+                "Larger values mean at least one alternative moved further. Only evaluated cases on this page are shown; the source ranking is preserved.",
+                horizontal=True,
+                integer=True,
+            ),
+        )
     _render_case_pagination(result, page_key, run.analysis_run_id, namespace)
     _render_case_evidence(result.items)
 
@@ -802,18 +903,29 @@ def _participant_case_page(context, run, group_id):
             chart.append(
                 {
                     "Participant": item.subject_label,
-                    "Session displacement": float(
-                        session_metrics.get("maximum_rank_displacement", 0)
+                    "Session displacement": session_metrics.get(
+                        "maximum_rank_displacement"
                     ),
-                    "Group displacement": float(
-                        group_metrics.get("maximum_rank_displacement", 0)
+                    "Group displacement": group_metrics.get(
+                        "maximum_rank_displacement"
                     ),
                 }
             )
     if rows:
         st.dataframe(rows, hide_index=True, width="stretch")
     if chart:
-        st.bar_chart(pd.DataFrame(chart).set_index("Participant"), horizontal=True)
+        render_chart(
+            pd.DataFrame(chart).set_index("Participant"),
+            ChartSpec(
+                "Ranking changes after omitting each participant",
+                "Participant",
+                "Maximum rank displacement (positions)",
+                f"Group {group_id} · Analysis run {run.run_number} · Page {result.page} of {max(1, result.page_count)}",
+                "Group and session series use separate baselines. Only evaluated cases on this page are shown; this is a counterfactual comparison, not a causal claim.",
+                horizontal=True,
+                integer=True,
+            ),
+        )
     _render_case_pagination(result, page_key, run.analysis_run_id, namespace)
     _render_case_evidence(result.items)
 
@@ -900,35 +1012,8 @@ def _source_label(run, latest_id, timezone_name):
 
 
 def method_label(method: AnalysisMethod) -> str:
-    return {
-        AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION: "Weight perturbation",
-        AnalysisMethod.CRITERION_REMOVAL: "Criterion removal",
-        AnalysisMethod.RANK_REVERSAL: "Rank reversal",
-        AnalysisMethod.STAKEHOLDER_GROUP_INFLUENCE: "Stakeholder-group influence",
-        AnalysisMethod.PARTICIPANT_INFLUENCE: "Participant influence",
-    }[method]
+    return TEST_DEFINITIONS[method].label
 
 
 def method_explanation(method: AnalysisMethod) -> str:
-    return {
-        AnalysisMethod.ONE_AT_A_TIME_WEIGHT_PERTURBATION: (
-            "Changes one criterion weight at a time, redistributes remaining "
-            "weight proportionally, and reruns ranking at session and group levels."
-        ),
-        AnalysisMethod.CRITERION_REMOVAL: (
-            "Removes each criterion from the pairwise matrix, recomputes AHP "
-            "weights, and reruns ranking to expose structural dependence."
-        ),
-        AnalysisMethod.RANK_REVERSAL: (
-            "Removes each alternative and checks whether surviving alternatives "
-            "reverse order or change to or from a tie."
-        ),
-        AnalysisMethod.STAKEHOLDER_GROUP_INFLUENCE: (
-            "Removes one eligible stakeholder group, rebuilds the aggregate, and "
-            "measures its effect on the session ranking."
-        ),
-        AnalysisMethod.PARTICIPANT_INFLUENCE: (
-            "Removes one included participant, rebuilds the affected group and "
-            "session aggregates, and shows moderator-only influence evidence."
-        ),
-    }[method]
+    return TEST_DEFINITIONS[method].methodology

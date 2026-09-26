@@ -191,3 +191,24 @@ Focused verification:
 PYTHONPATH=src:. python -m pytest tests/integration/test_manual_reporting.py \
   tests/presentation/test_manual_reporting.py tests/presentation/test_package_reporting.py -q
 ```
+
+## Session Processing workflow
+
+Processing uses six evidence-backed steps with a shared, separated **Begin Process**
+action. Successful operations reload saved evidence and advance to the next step,
+with a receipt and focus on the new step heading. Incomplete reviews, failures,
+and analysis batches without evaluated cases remain available for review. Progress
+is reconstructed from the current roster and processing lineage; inspecting an
+older run does not advance current work.
+
+Stakeholder-group influence includes hypothetical omissions of required groups.
+It leaves the session's actual group policy and participant influence restrictions
+unchanged. Group-influence method revision 2 is included in the input hash, so old
+runs that skipped required groups are not reused; their history stays readable.
+Charts provide explicit labels, units, scope, and tabular alternatives, while all
+five tests explain their inputs, methods, outputs, and interpretation.
+
+The package completion screen retains its **Open Reports & Publication** action
+across reruns and uses the registered `reports` route with the session selected.
+See [browser regression instructions](tests/browser/README.md) for the full flow,
+mobile review scenarios, screenshots, and accessibility-check limitations.

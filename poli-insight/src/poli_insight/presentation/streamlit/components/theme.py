@@ -9,10 +9,16 @@ from __future__ import annotations
 import streamlit as st
 
 
+def is_dark_theme() -> bool:
+    """Use the browser's active theme, with a server default for initial renders."""
+    selected = getattr(st.context.theme, "type", None)
+    return (selected or st.get_option("theme.base")) == "dark"
+
+
 def render_theme() -> None:
     """Install shared tokens on each render, including standalone dialogs."""
 
-    dark = st.get_option("theme.base") == "dark"
+    dark = is_dark_theme()
     surface = "#1B2A40" if dark else "#FFFFFF"
     muted = "#23344B" if dark else "#EAF0F5"
     border = "#44546A" if dark else "#D6DEE8"
@@ -33,6 +39,10 @@ def render_theme() -> None:
             --pi-radius: 0.75rem;
             --pi-shadow: 0 3px 14px rgb(23 43 77 / 6%);
             min-width: 0;
+        }}
+        [class*="st-key-pi_admin_action_"] {{
+            margin-block: var(--pi-space-6);
+            border-top: 3px solid var(--pi-accent);
         }}
         .st-key-pi_app_shell {{
             max-width: 1280px;
@@ -82,7 +92,10 @@ def render_theme() -> None:
             padding-block: var(--pi-space-2) var(--pi-space-4);
             border-bottom: 1px solid var(--pi-border);
         }}
+        .st-key-pi_workflow_compact {{ display: none; }}
         @media (max-width: 640px) {{
+            .st-key-pi_workflow_compact {{ display: block; }}
+            .st-key-pi_workflow_desktop {{ display: none; }}
             [class*="st-key-pi_surface_"], [class*="st-key-pi_admin_"] {{
                 padding: var(--pi-space-4);
             }}

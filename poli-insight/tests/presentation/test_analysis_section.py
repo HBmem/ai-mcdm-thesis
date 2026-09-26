@@ -218,9 +218,9 @@ def test_analysis_stage_separates_all_five_selectable_tests() -> None:
         "Participant influence",
     )
     assert next(
-        item for item in app.button if item.label == "Run selected tests"
+        item for item in app.button if item.key == "processing:run_analyses:session-1"
     ).disabled
-    assert len(app.info) == 5
+    assert len([item for item in app.expander if item.label.startswith("How ")]) == 11
 
 
 def test_weight_perturbation_controls_default_to_standard() -> None:
